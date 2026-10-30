@@ -1,4 +1,4 @@
-/* Beacon Parking UI. State lives in the shared backend (Google Apps Script)
+/* Beau on Beacon Hill UI. State lives in the shared backend (Google Apps Script)
    when configured, otherwise in this browser only. */
 (function () {
   'use strict';
@@ -42,21 +42,44 @@
 
   // ------------------------------------------------------------ setup link
   // #setup=<base64 JSON {api, key, name, home}> configures a phone in one tap.
-  function readSetupLink() {
-    var m = location.hash.match(/setup=([^&]+)/);
-    if (!m) return;
+  // An iPhone home-screen app keeps its own storage apart from the browser,
+  // so the same link can also be pasted into the app.
+  function applySetupLink(text) {
+    var m = String(text || '').match(/setup=([^&\s]+)/);
+    if (!m) return false;
     try {
       var s = JSON.parse(decodeURIComponent(escape(atob(decodeURIComponent(m[1])))));
-      if (s.api) cfg.api = s.api;
-      if (s.key) cfg.key = s.key;
+      if (!s.api || !s.key) return false;
+      cfg.api = s.api;
+      cfg.key = s.key;
       if (s.name) cfg.name = s.name;
       saveJSON('bp.cfg', cfg);
       if (s.home && !state.home) { state.home = s.home; saveJSON('bp.state', state); }
-      toast('This phone is set up' + (s.name ? ' for ' + s.name : '') + '.');
+      toast('This phone is connected' + (s.name ? ' for ' + s.name : '') + '.');
+      return true;
     } catch (e) {
-      toast('That setup link could not be read.');
+      return false;
     }
+  }
+
+  function readSetupLink() {
+    if (!/setup=/.test(location.hash)) return;
+    if (!applySetupLink(location.hash)) toast('That setup link could not be read.');
     history.replaceState(null, '', location.pathname + location.search);
+  }
+
+  function renderConnect() {
+    var el = $('connect');
+    el.hidden = synced();
+    if (el.hidden) return;
+    el.innerHTML = '<b>Connect this phone</b><div class="muted small" style="margin:4px 0 8px">' +
+      'Paste the setup link you were sent so both phones share the car and calendar.</div>' +
+      '<div class="row"><input id="connect-link" placeholder="Paste setup link" autocomplete="off">' +
+      '<button class="btn small primary" id="btn-connect">Connect</button></div>';
+    $('btn-connect').onclick = function () {
+      if (applySetupLink($('connect-link').value)) { render(); pull(); }
+      else toast('That does not look like a setup link.');
+    };
   }
 
   // ------------------------------------------------------------ backend
@@ -459,7 +482,7 @@
   function icsFor(events) {
     function t(iso) { return iso.replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
     function e(s) { return String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;'); }
-    var out = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Beacon Parking//EN', 'METHOD:PUBLISH'];
+    var out = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Beau on Beacon Hill//EN', 'METHOD:PUBLISH'];
     events.forEach(function (ev, i) {
       out.push('BEGIN:VEVENT', 'UID:bp-' + t(ev.start) + '-' + i + '@beacon-parking', 'DTSTAMP:' + t(new Date().toISOString()),
         'DTSTART:' + t(ev.start), 'DTEND:' + t(ev.end), 'SUMMARY:' + e(ev.title),
@@ -497,6 +520,7 @@
     renderMoves();
     renderCalendar();
     renderSnow();
+    renderConnect();
     paintMap();
     $('footnote').innerHTML = 'Schedule: City of Boston open data (retrieved ' + esc(String(data.sourceUpdated).slice(0, 10)) +
       '). Beacon Hill residential sweeping runs Mar 1 to Dec 31; holidays are not excluded. Always check the posted sign. ' +
@@ -628,9 +652,14 @@
   }
 
   function saveSettings() {
-    cfg.name = $('set-name').value.trim();
-    cfg.api = $('set-api').value.trim();
-    cfg.key = $('set-key').value.trim();
+    var link = $('set-link').value.trim();
+    if (link && !applySetupLink(link)) { toast('That does not look like a setup link.'); return; }
+    if (!link) {
+      cfg.api = $('set-api').value.trim();
+      cfg.key = $('set-key').value.trim();
+    }
+    cfg.name = $('set-name').value.trim() || cfg.name;
+    $('set-link').value = '';
     saveJSON('bp.cfg', cfg);
     var next = Object.assign({}, state.settings, {
       searchMinutes: clamp(+$('set-search').value, 15, 240, 60),

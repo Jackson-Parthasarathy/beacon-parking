@@ -2,3 +2,4 @@ tools/raw/
 backend/config.local.*
 __pycache__/
 .DS_Store
+tools/logo/*.webp

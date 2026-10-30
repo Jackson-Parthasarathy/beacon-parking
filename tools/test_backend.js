@@ -11,6 +11,7 @@ const ctx = {
   ContentService: { MimeType: { JSON: 'json' }, createTextOutput: t => ({ setMimeType: () => t }) },
   Utilities: { getUuid: () => 'abcd-1234-efgh-5678-ijkl-9012', base64Encode: s => Buffer.from(s).toString('base64'), Charset: { UTF_8: 'utf8' } },
   Logger: { log: m => log.push(m) },
+  Session: { getEffectiveUser: () => ({ getEmail: () => 'Owner@Example.com' }) },
   ScriptApp: { getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST/exec' }) },
   CalendarApp: { getDefaultCalendar: () => ({
     createEvent: (title, start, end, o) => {
@@ -38,6 +39,7 @@ let r = post({ action: 'park', key, by: 'Jackson', car: { curbId: 421 }, events:
 assert(r.ok && r.state.car.curbId === 421 && r.state.updatedBy === 'Jackson', 'park saves car and author');
 assert(Object.keys(calendar).length === 2, 'two invites created');
 assert(Object.values(calendar).find(e => e.title === 'Move car A').reminders.join() === '30,900', 'reminders applied');
+assert(!/owner@example.com/i.test(Object.values(calendar)[0].o.guests), 'script owner left off the guest list');
 
 log.length = 0;
 r = post({ action: 'plan', key, by: 'Partner', events: [evA, { ...evB, title: 'Deadline C' }] });

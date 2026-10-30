@@ -1,4 +1,4 @@
-# Beacon Parking
+# Beau on Beacon Hill
 
 A phone web app for Beacon Hill street cleaning. It knows every Beacon Hill
 curb's sweeping schedule, keeps track of where the car is, ranks where to move
@@ -48,7 +48,7 @@ The posted sign always wins.
 
 ## Setup (about 20 minutes, once)
 
-### 1. Publish the app (GitHub Pages, free)
+### 1. Publish the app (GitHub Pages, free; done)
 
 From this folder:
 
@@ -69,29 +69,38 @@ Do this from whichever of you has a Google account. The events live on that
 account's calendar, and everyone listed in `GUESTS` (for example the Outlook
 address) gets a real invite.
 
-1. Go to script.google.com, then New project. Name it "Beacon Parking".
-2. Replace the contents of `Code.gs` with `backend/Code.gs` from this folder.
-3. Paste the `CONFIG` block from `backend/config.local.gs` over the CONFIG at
-   the top, and fill in the email addresses and your partner's name.
-4. Project Settings (gear icon): check "Show appsscript.json manifest file in
-   editor", then replace its contents with `backend/appsscript.json`.
-5. Deploy, then New deployment, then select type **Web app**. Execute as:
-   **Me**. Who has access: **Anyone**. Deploy and approve the calendar
-   permission. Copy the Web app URL (it ends in `/exec`).
-6. Paste that URL into `CONFIG.WEB_APP_URL`, save, choose `setup` in the
-   function dropdown, and click Run. The execution log prints one setup link
-   per person.
+1. Fill in `backend/config.local.gs` (emails, names, home) and run
+   `python backend/build_paste.py`. That writes `backend/config.local.Code.gs`,
+   the complete script with your settings in it. Both files are gitignored.
+2. Go to script.google.com, then New project. Name it "Beau on Beacon Hill".
+3. Project Settings (gear icon): check "Show appsscript.json manifest file in
+   editor". Back in the Editor, replace `appsscript.json` with
+   `backend/appsscript.json`, and replace `Code.gs` with
+   `backend/config.local.Code.gs`. Save.
+4. Deploy, then New deployment, then select type **Web app**. Execute as:
+   **Me**. Who has access: **Anyone**. Deploy and approve the permissions
+   (Google warns the app is unverified because it is your own script: choose
+   Advanced, then Go to Beau on Beacon Hill). Copy the Web app URL (it ends in
+   `/exec`).
+5. Paste that URL into `WEB_APP_URL` in the CONFIG at the top, save, choose
+   `setup` in the function dropdown, and click Run. The execution log prints
+   one setup link per person.
 
 Anyone with the URL can reach the web app, but it only responds to requests
-that carry the passphrase from step 6.
+that carry the passphrase made in step 5.
 
-### 3. Each iPhone
+### 3. Each phone
 
-1. Text each person their setup link and open it in **Safari**. The phone is
-   now connected and knows whose phone it is.
-2. Tap Share, then **Add to Home Screen**. Open it from the home screen from
-   now on.
-3. Allow location when asked; that powers "I just parked here".
+1. Text each person their setup link.
+2. On the iPhone, open the app URL in Safari or Chrome, tap Share, then **Add
+   to Home Screen**.
+3. Open the app from the home screen. In the "Connect this phone" box, paste
+   your setup link and tap Connect. (A home screen app keeps its own storage
+   separate from the browser, which is why the link is pasted here.)
+4. Allow location when asked; that powers "I just parked here".
+
+Chrome works too, on iPhone, Android, or a laptop. Each browser connects
+separately with the same setup link.
 
 ## Daily use
 

@@ -1,7 +1,7 @@
 /* Offline shell. App files are network-first so updates land on next open;
    the Leaflet library is cache-first. */
-var CACHE = 'bp-v1';
-var SHELL = ['./', 'index.html', 'styles.css', 'planner.js', 'app.js', 'data/segments.json', 'data/segments.js', 'manifest.webmanifest', 'icons/icon-180.png'];
+var CACHE = 'bp-v2';
+var SHELL = ['./', 'index.html', 'styles.css', 'planner.js', 'app.js', 'data/segments.json', 'data/segments.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/beau-128.png'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).then(function () { return self.skipWaiting(); }));

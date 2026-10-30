@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Beacon Parking</title>
+  <title>Beau on Beacon Hill</title>
   <meta name="description" content="Beacon Hill street cleaning, where the car is, and where to move it next.">
   <meta name="theme-color" content="#0f2a47">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Parking">
+  <meta name="apple-mobile-web-app-title" content="Beau">
   <link rel="apple-touch-icon" href="icons/icon-180.png">
-  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="icon" type="image/png" href="icons/favicon-32.png">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <link rel="stylesheet" href="styles.css">
@@ -20,7 +20,7 @@
   <div id="map" aria-label="Map of Beacon Hill street cleaning"></div>
 
   <header class="topbar">
-    <div class="brand">Beacon Parking</div>
+    <div class="brand"><img src="icons/beau-128.png" alt="" width="26" height="26">Beau on Beacon Hill</div>
     <div class="topbar-actions">
       <button class="icon-btn" id="btn-locate" aria-label="Center on me">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7" fill="none"/></svg>
@@ -41,6 +41,8 @@
 
   <main class="sheet" id="sheet">
     <div class="grabber" id="grabber" aria-hidden="true"></div>
+
+    <section class="card connect" id="connect" hidden></section>
 
     <section class="card car-card" id="car-card"></section>
 
@@ -98,6 +100,7 @@
       </div>
       <details class="field" id="sync-details">
         <summary>Shared sync and calendar invites</summary>
+        <label class="field"><span>Setup link (paste to connect)</span><input id="set-link" autocomplete="off" placeholder="https://...#setup=..."></label>
         <label class="field"><span>Backend URL</span><input id="set-api" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec"></label>
         <label class="field"><span>Passphrase</span><input id="set-key" type="password" autocomplete="off"></label>
         <p class="muted small" id="sync-status"></p>

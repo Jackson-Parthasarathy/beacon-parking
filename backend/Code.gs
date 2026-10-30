@@ -1,12 +1,12 @@
 /**
- * Beacon Parking backend: shared car state for both phones, plus calendar
+ * Beau on Beacon Hill backend: shared car state for both phones, plus calendar
  * invites. Runs as a Google Apps Script web app under one Google account;
  * events are created on that account's calendar and everyone in GUESTS gets
  * a real invite (Outlook and Gmail both accept these).
  *
  * Setup is in README.md. In short: paste this file and appsscript.json into a
- * new Apps Script project, fill in CONFIG, run setup() once, then deploy as a
- * web app (Execute as: Me, Who has access: Anyone).
+ * new Apps Script project, fill in CONFIG, deploy as a web app (Execute as:
+ * Me, Who has access: Anyone), then run setup() once.
  */
 
 var CONFIG = {
@@ -107,7 +107,7 @@ function syncEvents_(state, events) {
     var created = cal.createEvent(ev.title, new Date(ev.start), new Date(ev.end), {
       description: ev.description || '',
       location: ev.location || '',
-      guests: CONFIG.GUESTS,
+      guests: guests_(),
       sendInvites: true
     });
     created.setGuestsCanModify(false);
@@ -119,6 +119,14 @@ function syncEvents_(state, events) {
 
   state.eventRefs = nextIds;
   state.events = events;
+}
+
+/** GUESTS minus the account running the script, which owns the events. */
+function guests_() {
+  var me = '';
+  try { me = Session.getEffectiveUser().getEmail().toLowerCase(); } catch (err) { me = ''; }
+  return CONFIG.GUESTS.split(',').map(function (s) { return s.trim(); })
+    .filter(function (s) { return s && s.toLowerCase() !== me; }).join(',');
 }
 
 function sig_(ev) {

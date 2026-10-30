@@ -80,7 +80,12 @@ body.pick-mode .sheet { transform: translateY(100%); }
   border-radius: 999px;
   box-shadow: var(--shadow);
   font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 5px;
 }
+.brand img { border-radius: 50%; border: 1.5px solid #fff; display: block; }
 .topbar-actions { display: flex; gap: 8px; pointer-events: auto; }
 .icon-btn {
   width: 40px; height: 40px;
@@ -219,6 +224,11 @@ h3 { margin: 0 0 6px; font-size: 18px; }
 .card h4 { margin: 0 0 6px; font-size: 15px; }
 .card ul { margin: 6px 0 0; padding-left: 18px; font-size: 14px; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.connect { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.connect .row input {
+  flex: 1; min-width: 0; font: inherit; font-size: 16px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--ink);
+}
 .switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .footnote { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 4px 2px 0; }
 
