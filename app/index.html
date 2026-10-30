@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Beacon Parking</title>
+  <meta name="description" content="Beacon Hill street cleaning, where the car is, and where to move it next.">
+  <meta name="theme-color" content="#0f2a47">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Parking">
+  <link rel="apple-touch-icon" href="icons/icon-180.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="map" aria-label="Map of Beacon Hill street cleaning"></div>
+
+  <header class="topbar">
+    <div class="brand">Beacon Parking</div>
+    <div class="topbar-actions">
+      <button class="icon-btn" id="btn-locate" aria-label="Center on me">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7" fill="none"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="legend" id="legend">
+    <span><i class="sw red"></i>Sweeping now</span>
+    <span><i class="sw orange"></i>Within 24 h</span>
+    <span><i class="sw amber"></i>Within 3 days</span>
+    <span><i class="sw green"></i>Clear</span>
+    <span><i class="sw blue dashed"></i>Snow route</span>
+  </div>
+
+  <main class="sheet" id="sheet">
+    <div class="grabber" id="grabber" aria-hidden="true"></div>
+
+    <section class="card car-card" id="car-card"></section>
+
+    <div class="actions">
+      <button class="btn primary" id="btn-parked">I just parked here</button>
+      <button class="btn" id="btn-pick">Pick on map</button>
+    </div>
+
+    <section class="banner snow" id="snow-banner" hidden></section>
+
+    <section>
+      <div class="section-head">
+        <h2>Best next moves</h2>
+        <span class="muted small" id="moves-sub"></span>
+      </div>
+      <ol class="moves" id="moves"></ol>
+    </section>
+
+    <section class="card" id="cal-card"></section>
+
+    <section class="card" id="snow-card"></section>
+
+    <p class="footnote" id="footnote"></p>
+  </main>
+
+  <!-- Confirm parked spot -->
+  <div class="modal" id="confirm" hidden>
+    <div class="modal-body">
+      <h3>Where is the car?</h3>
+      <p class="muted small" id="confirm-sub">Closest curbs to your location. Pick the side you parked on.</p>
+      <ul class="choices" id="choices"></ul>
+      <div class="actions">
+        <button class="btn primary" id="btn-confirm">Save spot</button>
+        <button class="btn" id="btn-cancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings -->
+  <div class="modal" id="settings" hidden>
+    <div class="modal-body">
+      <h3>Settings</h3>
+      <label class="field"><span>Your name</span><input id="set-name" autocomplete="off" placeholder="Shown when you update the car"></label>
+      <label class="field"><span>Time to find a spot (minutes)</span><input id="set-search" type="number" min="15" max="240" step="15"></label>
+      <label class="field"><span>Heads-up before a curb opens (minutes)</span><input id="set-lead" type="number" min="0" max="60" step="5"></label>
+      <label class="field"><span>Farthest walk from home (minutes)</span><input id="set-walk" type="number" min="3" max="25" step="1"></label>
+      <label class="check"><input type="checkbox" id="set-fifth"><span>Skip 5th-week sweeps on every-other-week streets (City rule; check the posted sign)</span></label>
+      <div class="field">
+        <span>Home</span>
+        <div class="row">
+          <span class="muted small" id="home-label">Not set</span>
+          <button class="btn small" id="btn-home-here">Use my location</button>
+          <button class="btn small" id="btn-home-map">Tap on map</button>
+        </div>
+      </div>
+      <details class="field" id="sync-details">
+        <summary>Shared sync and calendar invites</summary>
+        <label class="field"><span>Backend URL</span><input id="set-api" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec"></label>
+        <label class="field"><span>Passphrase</span><input id="set-key" type="password" autocomplete="off"></label>
+        <p class="muted small" id="sync-status"></p>
+      </details>
+      <div class="actions">
+        <button class="btn primary" id="btn-save-settings">Save</button>
+        <button class="btn" id="btn-close-settings">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="data/segments.js"></script>
+  <script src="planner.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

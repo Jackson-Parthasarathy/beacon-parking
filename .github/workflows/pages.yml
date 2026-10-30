@@ -1,0 +1,47 @@
+# Publishes app/ to GitHub Pages on every push, and on the 1st of each month
+# re-pulls the City's sweeping schedule first so the app stays current.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 9 1 * *"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refresh City data
+        if: github.event_name != 'push'
+        run: |
+          pip install --quiet pandas shapely pyproj
+          python tools/fetch_raw.py
+          python tools/build_data.py
+          node tools/test_planner.js
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add app/data
+          git diff --cached --quiet || (git commit -m "Refresh street sweeping data" && git push)
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app
+      - id: deployment
+        uses: actions/deploy-pages@v4
