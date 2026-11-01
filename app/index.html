@@ -37,6 +37,7 @@
     <span><i class="sw amber"></i>Within 3 days</span>
     <span><i class="sw green"></i>Clear</span>
     <span><i class="sw blue dashed"></i>Snow route</span>
+    <span><i class="sq permit"></i>Moving truck</span>
   </div>
 
   <main class="sheet" id="sheet">
@@ -45,6 +46,8 @@
     <section class="card connect" id="connect" hidden></section>
 
     <section class="card car-card" id="car-card"></section>
+
+    <section class="card feedback" id="feedback" hidden></section>
 
     <div class="actions">
       <button class="btn primary" id="btn-parked">I just parked here</button>
@@ -58,8 +61,11 @@
         <h2>Best next moves</h2>
         <span class="muted small" id="moves-sub"></span>
       </div>
+      <div class="card next-move" id="next-move" hidden></div>
       <ol class="moves" id="moves"></ol>
     </section>
+
+    <section class="card" id="trips-card"></section>
 
     <section class="card" id="cal-card"></section>
 
@@ -103,7 +109,12 @@
         <label class="field"><span>Setup link (paste to connect)</span><input id="set-link" autocomplete="off" placeholder="https://...#setup=..."></label>
         <label class="field"><span>Backend URL</span><input id="set-api" autocomplete="off" placeholder="https://script.google.com/macros/s/.../exec"></label>
         <label class="field"><span>Passphrase</span><input id="set-key" type="password" autocomplete="off"></label>
+        <div class="row"><button class="btn small" id="btn-test">Test connection</button></div>
         <p class="muted small" id="sync-status"></p>
+      </details>
+      <details class="field" id="shortcut-details">
+        <summary>Hands-free logging (iPhone Shortcut)</summary>
+        <div id="shortcut-help"></div>
       </details>
       <div class="actions">
         <button class="btn primary" id="btn-save-settings">Save</button>
@@ -117,6 +128,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="data/segments.js"></script>
   <script src="planner.js"></script>
+  <script src="engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

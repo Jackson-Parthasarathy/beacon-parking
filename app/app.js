@@ -1,28 +1,26 @@
 /* Beau on Beacon Hill UI. State lives in the shared backend (Google Apps Script)
-   when configured, otherwise in this browser only. */
+   when configured, otherwise in this browser only. Planning, events and
+   learning come from engine.js, which the backend runs too. */
 (function () {
   'use strict';
 
-  var P = window.Planner;
+  var P = window.Planner, E = window.Engine;
   var $ = function (id) { return document.getElementById(id); };
   var HOME_DEFAULT_VIEW = [42.3586, -71.0680];
-  var WALK_M_PER_MIN = 80;
-
-  var DEFAULT_SETTINGS = {
-    searchMinutes: 60, leadMinutes: 10, walkMinutes: 12,
-    skipFifthWeek: true, snowEmergency: false
-  };
+  var EMPTY = { car: null, home: null, settings: {}, events: [], history: [], trips: [] };
 
   var data = null;          // segments.json
+  var restrictions = null;  // restrictions.json (moving-truck permits)
   var curbsById = {};
   var cfg = loadJSON('bp.cfg', {});            // per device: api, key, name
-  var state = loadJSON('bp.state', { car: null, home: null, settings: {}, events: [], history: [] });
+  var state = Object.assign({}, EMPTY, loadJSON('bp.state', {}));
+  var skipped = loadJSON('bp.skipped', {});    // feedback prompts dismissed on this phone
   var plan = null;
   var selectedMove = null;
   var pending = null;       // confirm-spot candidates
   var pickTarget = null;    // 'car' | 'home'
 
-  var map, curbLayer, optLayer, carMarker, homeMarker, meMarker, snowLayer;
+  var map, curbLayer, optLayer, permitLayer, carMarker, homeMarker, meMarker, snowLayer;
   var curbLines = {};
 
   // ------------------------------------------------------------ storage
@@ -33,11 +31,7 @@
   function saveJSON(k, v) {
     try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ }
   }
-  function settings() {
-    var s = Object.assign({}, DEFAULT_SETTINGS, state.settings || {});
-    s.maxWalkM = s.walkMinutes * WALK_M_PER_MIN;
-    return s;
-  }
+  function settings() { return E.settings(state); }
   function synced() { return !!(cfg.api && cfg.key); }
 
   // ------------------------------------------------------------ setup link
@@ -83,6 +77,11 @@
   }
 
   // ------------------------------------------------------------ backend
+  var REACH_HELP = 'Could not reach your Google script. In Apps Script, check Deploy, then Manage deployments: ' +
+    'Who has access must be Anyone. Then use Settings, then Test connection.';
+  var PAGE_HELP = 'Your Google script answered with a web page instead of data. In Apps Script, go to Deploy, ' +
+    'then Manage deployments, click the pencil, choose New version, and Deploy.';
+
   function api(action, payload) {
     var body = Object.assign({ action: action, key: cfg.key, by: cfg.name || '' }, payload || {});
     return fetch(cfg.api, {
@@ -90,62 +89,88 @@
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(body),
       redirect: 'follow'
-    }).then(function (r) { return r.json(); }).then(function (res) {
-      if (!res.ok) throw new Error(res.error || 'Backend error');
-      return res.state;
-    });
+    }).catch(function () { throw new Error(REACH_HELP); })
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        var res;
+        try { res = JSON.parse(t); } catch (e) { throw new Error(PAGE_HELP); }
+        if (!res.ok) throw new Error(res.error === 'wrong passphrase'
+          ? 'The passphrase does not match. Paste the latest setup link from the Apps Script log.' : res.error || 'Backend error');
+        return res.state;
+      });
+  }
+
+  function testConnection() {
+    if (!synced()) { setSyncStatus('Not connected yet. Paste a setup link first.'); return; }
+    setSyncStatus('Testing...');
+    fetch(cfg.api, { redirect: 'follow' })
+      .catch(function () { throw new Error(REACH_HELP); })
+      .then(function (r) { return r.text(); })
+      .then(function (t) {
+        var res;
+        try { res = JSON.parse(t); } catch (e) { throw new Error(PAGE_HELP); }
+        if (!res.ok || res.service !== 'beacon-parking') throw new Error('That URL is not the Beau backend.');
+        if (!res.version || res.version < 2) {
+          throw new Error('Reached the script, but it is running old code. Paste the new Code.gs, then deploy a New version.');
+        }
+        return api('state');
+      })
+      .then(function (s) { adopt(s); setSyncStatus('Connected. The script, passphrase, and calendar sync all work.'); })
+      .catch(function (e) { setSyncStatus(e.message); });
   }
 
   function pull() {
     if (!synced()) return Promise.resolve();
     return api('state').then(function (s) {
       adopt(s);
-      setSyncStatus('Synced ' + fmtTime(new Date()));
+      setSyncStatus('Synced ' + E.fmtTime(new Date()));
     }).catch(function (e) {
-      setSyncStatus('Could not reach the backend: ' + e.message);
+      setSyncStatus(e.message);
     });
   }
 
   function adopt(s) {
     if (!s) return;
-    state = Object.assign({ car: null, home: null, settings: {}, events: [], history: [] }, s);
+    state = Object.assign({}, EMPTY, s);
     saveJSON('bp.state', state);
     render();
   }
 
-  // Save locally first so the UI never waits on the network.
+  // Save locally first so the UI never waits on the network. The events the
+  // phone computed go along as a fallback; the backend recomputes them.
   function commit(action, payload, msg) {
+    plan = computePlan();
+    state.events = E.buildEvents(plan, ctx());
     saveJSON('bp.state', state);
     render();
     if (!synced()) { if (msg) toast(msg); return Promise.resolve(); }
-    return api(action, payload).then(function (s) {
+    var body = Object.assign({ events: state.events, plannedMove: state.plannedMove || null }, payload || {});
+    return api(action, body).then(function (s) {
       adopt(s);
       if (msg) toast(msg);
     }).catch(function (e) {
-      toast('Saved on this phone only. Sync failed: ' + e.message);
+      toast('Saved on this phone only. ' + e.message);
     });
   }
 
   function setSyncStatus(t) { var el = $('sync-status'); if (el) el.textContent = t; }
 
-  // ------------------------------------------------------------ formatting
-  var fmtDay = new Intl.DateTimeFormat('en-US', { timeZone: P.TZ, weekday: 'short', month: 'short', day: 'numeric' });
-  var fmtClock = new Intl.DateTimeFormat('en-US', { timeZone: P.TZ, hour: 'numeric', minute: '2-digit' });
-  function fmtTime(d) { return fmtClock.format(d); }
-  function fmtWhen(d) { return fmtDay.format(d) + ', ' + fmtClock.format(d); }
+  // ------------------------------------------------------------ helpers
+  function ctx() { return { data: data, state: state, restrictions: restrictions, appUrl: appUrl() }; }
+  function opts() { return E.opts(data, settings()); }
+  function appUrl() { return location.origin + location.pathname; }
   function fmtSpan(ms) {
     var h = ms / P.HOUR;
     if (h < 1) return Math.max(1, Math.round(ms / P.MIN)) + ' min';
     if (h < 36) return Math.round(h) + ' h';
     return Math.round(h / 24) + ' days';
   }
-  function walkText(m) { return Math.max(1, Math.round(m / WALK_M_PER_MIN)) + ' min walk'; }
   function esc(s) {
     return String(s).replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
-  function span(c) { return c.from + ' to ' + c.to; }
+  var span = E.span, fmtWhen = E.fmtWhen, fmtTime = E.fmtTime, fmtDay = E.fmtDay;
 
   function curbColor(st) {
     if (st.state === 'sweeping') return 'var(--red)';
@@ -165,6 +190,18 @@
     var m = v.match(/var\((--[a-z]+)\)/);
     return m ? getComputedStyle(document.documentElement).getPropertyValue(m[1]).trim() : v;
   }
+  function permitsFor(curbId, from, to) {
+    return P.permitsOn(E.permitIndex(restrictions), curbId, from, to);
+  }
+  function permitText(list) {
+    var p = list[0];
+    return 'Moving truck permit, likely ' + fmtDay(new Date(p.from)) + ' to ' + fmtDay(new Date(p.to));
+  }
+  function walkLink(lat, lng) {
+    var ios = /iPhone|iPad|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document;
+    return ios ? 'https://maps.apple.com/?daddr=' + lat + ',' + lng + '&dirflg=w'
+      : 'https://www.google.com/maps/dir/?api=1&destination=' + lat + ',' + lng + '&travelmode=walking';
+  }
 
   // ------------------------------------------------------------ map
   function initMap() {
@@ -180,6 +217,7 @@
     });
 
     curbLayer = L.layerGroup().addTo(map);
+    permitLayer = L.layerGroup().addTo(map);
     optLayer = L.layerGroup().addTo(map);
 
     data.curbs.forEach(function (c) {
@@ -209,7 +247,7 @@
       : kind === 'home'
         ? '<svg viewBox="0 0 24 24"><path d="M12 3l9 8h-3v9h-5v-6h-2v6H6v-9H3z"/></svg>'
         : (label || '');
-    var size = kind === 'car' ? 34 : kind === 'home' ? 26 : kind === 'me' ? 16 : 24;
+    var size = kind === 'car' ? 34 : kind === 'home' ? 26 : kind === 'me' ? 16 : kind === 'permit' ? 14 : 24;
     return L.divIcon({ className: '', html: '<div class="pin ' + kind + '">' + inner + '</div>', iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
   }
 
@@ -220,11 +258,15 @@
     if (c.metered) flags.push('Metered, not resident parking');
     if (c.daily) flags.push('Swept every night');
     if (c.snowArtery) flags.push('Snow emergency route');
+    var permits = permitsFor(c.id, now, new Date(now.getTime() + 21 * P.DAY));
+    if (permits.length) flags.push(permitText(permits));
     var html = '<b>' + esc(P.curbLabel(c)) + '</b><br><span>' + esc(span(c)) + '</span><br>' +
       esc(P.describe(c, settings())) +
       (flags.length ? '<br><span style="color:' + cssVar('var(--orange)') + '">' + esc(flags.join('. ')) + '</span>' : '') +
       '<br><br><b>' + (st.state === 'sweeping' ? 'Sweeping now' : 'Next sweeps') + '</b><br>' +
-      (next.length ? next.map(function (o) { return esc(fmtWhen(o.start) + ' to ' + fmtTime(o.end)); }).join('<br>') : 'None scheduled before spring') +
+      (next.length ? next.map(function (o) {
+        return esc(fmtWhen(o.start) + ' to ' + fmtTime(o.end)) + (o.holiday ? ' <i>(' + esc(o.holiday) + ': may be suspended)</i>' : '');
+      }).join('<br>') : 'None scheduled before spring') +
       '<button class="btn primary" data-park="' + c.id + '">Car is parked here</button>';
     var pop = L.popup({ maxWidth: 270 }).setLatLng(latlng).setContent(html).openOn(map);
     var btn = pop.getElement().querySelector('[data-park]');
@@ -254,38 +296,25 @@
     if (homeMarker) { map.removeLayer(homeMarker); homeMarker = null; }
     if (state.home) homeMarker = L.marker(ll(state.home), { icon: svgPin('home'), interactive: false }).addTo(map);
 
+    permitLayer.clearLayers();
+    ((restrictions && restrictions.permits) || []).forEach(function (p) {
+      if (new Date(p.to) < now) return;
+      L.marker([p.lat, p.lng], { icon: svgPin('permit'), zIndexOffset: 200 })
+        .bindPopup('<b>Moving truck permit</b><br>Likely ' + esc(fmtDay(new Date(p.from))) + ' to ' + esc(fmtDay(new Date(p.to))) +
+          '<br><span style="color:#5b6878">' + esc(p.note || '') + '</span>')
+        .addTo(permitLayer);
+    });
+
     optLayer.clearLayers();
-    moveList().forEach(function (o, i) {
+    E.moveList(plan).forEach(function (o, i) {
       L.marker(ll(o.curb.center), { icon: svgPin('opt', String(i + 1)), zIndexOffset: 500 - i })
         .on('click', function () { selectMove(i); })
         .addTo(optLayer);
     });
   }
 
-  function opts() { return { season: data.season['Beacon Hill'], skipFifthWeek: settings().skipFifthWeek }; }
-
-  // ------------------------------------------------------------ geometry
-  function nearestCurbs(latlng, n, preferId) {
-    var lat0 = latlng.lat * Math.PI / 180;
-    var kx = 111320 * Math.cos(lat0), ky = 110540;
-    function d2(p, a, b) {
-      var px = p[0] * kx, py = p[1] * ky, ax = a[0] * kx, ay = a[1] * ky, bx = b[0] * kx, by = b[1] * ky;
-      var dx = bx - ax, dy = by - ay, t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy || 1);
-      t = Math.max(0, Math.min(1, t));
-      var x = ax + t * dx - px, y = ay + t * dy - py;
-      return x * x + y * y;
-    }
-    var p = [latlng.lng, latlng.lat];
-    var ranked = data.curbs.map(function (c) {
-      var best = Infinity;
-      for (var i = 1; i < c.line.length; i++) best = Math.min(best, d2(p, c.line[i - 1], c.line[i]));
-      return { curb: c, dist: Math.sqrt(best) };
-    }).sort(function (a, b) { return a.dist - b.dist; });
-    if (preferId) {
-      var idx = ranked.findIndex(function (r) { return r.curb.id === preferId; });
-      if (idx > 0) ranked.unshift(ranked.splice(idx, 1)[0]);
-    }
-    return { latlng: latlng, list: ranked.slice(0, n) };
+  function nearestCurbs(latlng, n) {
+    return { latlng: latlng, list: E.nearestCurbs(data.curbs, latlng.lng, latlng.lat, n) };
   }
 
   // ------------------------------------------------------------ actions
@@ -330,8 +359,9 @@
       var c = r.curb, st = P.status(c, now, opts());
       var warn = c.metered ? ' Metered.' : c.daily ? ' Swept nightly.' : '';
       var next = st.state === 'sweeping' ? 'Sweeping now.' : st.next ? 'Next sweep ' + fmtWhen(st.next.start) + '.' : 'No sweep until spring.';
+      var addr = E.nearestAddress(c, near.latlng.lng, near.latlng.lat);
       return '<li data-i="' + i + '" class="' + (i === 0 ? 'selected' : '') + '"><div class="t">' + esc(P.curbLabel(c)) + '</div>' +
-        '<div class="s">' + esc(span(c)) + ', ' + Math.round(r.dist) + ' m away. ' + esc(next + warn) + '</div></li>';
+        '<div class="s">' + (addr ? 'Near ' + esc(addr) + '. ' : esc(span(c)) + '. ') + Math.round(r.dist) + ' m away. ' + esc(next + warn) + '</div></li>';
     }).join('');
     highlight(near.list[0].curb);
     $('confirm').hidden = false;
@@ -346,26 +376,37 @@
   }
 
   function saveCar(c, latlng) {
-    state.car = {
-      curbId: c.id,
-      lat: latlng ? +latlng.lat.toFixed(6) : c.center[1],
-      lng: latlng ? +latlng.lng.toFixed(6) : c.center[0],
-      parkedAt: new Date().toISOString(),
-      by: cfg.name || ''
+    var lat = latlng ? +latlng.lat.toFixed(6) : c.center[1];
+    var lng = latlng ? +latlng.lng.toFixed(6) : c.center[0];
+    var car = {
+      curbId: c.id, lat: lat, lng: lng, parkedAt: new Date().toISOString(),
+      by: cfg.name || '', source: 'app', confirmed: true, address: E.nearestAddress(c, lng, lat)
     };
-    state.history = [state.car].concat(state.history || []).slice(0, 40);
-    plan = computePlan();
-    var events = buildEvents(plan);
-    state.events = events;
-    commit('park', { car: state.car, events: events },
-      'Saved: ' + P.curbLabel(c) + (synced() && events.length ? '. Calendar invites updated.' : '.'));
+    E.recordPark(state, car);
+    commit('park', { car: car }, 'Saved: ' + P.curbLabel(c) + (synced() ? '. Calendar updated.' : '.'));
+  }
+
+  function confirmSide(switchTo) {
+    if (!state.car) return;
+    if (switchTo) {
+      state.car.curbId = switchTo.id;
+      state.car.address = E.nearestAddress(switchTo, state.car.lng, state.car.lat);
+      if (state.history[0] && state.history[0].parkedAt === state.car.parkedAt) state.history[0].curbId = switchTo.id;
+    }
+    state.car.confirmed = true;
+    commit('confirm', { curbId: state.car.curbId }, switchTo ? 'Switched to ' + P.curbLabel(switchTo) + '.' : 'Thanks, confirmed.');
+  }
+
+  function sendFeedback(min) {
+    var parkedAt = state.car.parkedAt;
+    E.applyFeedback(state, parkedAt, min);
+    commit('feedback', { parkedAt: parkedAt, searchMin: min }, 'Thanks. This tunes the rankings.');
   }
 
   function setHome(home) {
     state.home = home;
     endPick();
     $('settings').hidden = false;
-    plan = computePlan();
     commit('home', { home: home }, 'Home saved.');
     renderSettings();
   }
@@ -393,91 +434,8 @@
     setTimeout(function () { map.invalidateSize(); }, 280);
   }
 
-  // ------------------------------------------------------------ plan + events
-  function computePlan() {
-    var s = settings();
-    return P.rank({
-      curbs: data.curbs, now: new Date(), home: state.home, car: state.car,
-      settings: s, season: data.season['Beacon Hill'], limit: 6
-    });
-  }
-
-  function moveList() {
-    if (!plan || !plan.car) return [];
-    if (plan.mustMoveNow) return plan.options.concat(plan.fallback).slice(0, 6);
-    return plan.options.length ? plan.options : plan.fallback;
-  }
-
-  function appUrl() { return location.origin + location.pathname; }
-
-  function buildEvents(p) {
-    var s = settings(), events = [], car = p.car;
-    if (!car) return events;
-    var list = p.mustMoveNow ? p.options.concat(p.fallback) : p.options.length ? p.options : p.fallback;
-    var lines = list.slice(0, 3).map(function (o, i) {
-      return (i + 1) + ') ' + P.curbLabel(o.curb) + ' (' + span(o.curb) + '): ' +
-        (o.kind === 'fresh' ? 'opens ' + fmtWhen(o.at) : 'available now') +
-        ', good until ' + fmtWhen(o.until) + ', ' + walkText(o.walkM);
-    });
-
-    if (p.mustMoveNow) {
-      var start = new Date(Date.now() + 5 * P.MIN);
-      var why = s.snowEmergency && car.snowArtery ? 'Snow emergency: ' + car.street + ' is a snow route' : 'Sweeping on ' + car.street + ' now';
-      events.push({
-        title: 'Move the car now: ' + why,
-        start: start.toISOString(), end: new Date(start.getTime() + s.searchMinutes * P.MIN).toISOString(),
-        location: P.curbLabel(car) + ', Beacon Hill, Boston, MA',
-        description: why + '.\n\nBest spots right now:\n' + lines.join('\n') + '\n\n' + appUrl(),
-        reminders: [0]
-      });
-      return events;
-    }
-
-    var top = list[0];
-    if (top && top.kind === 'fresh') {
-      var openAt = top.at;
-      var st = new Date(openAt.getTime() - s.leadMinutes * P.MIN);
-      events.push({
-        title: 'Move car to ' + top.curb.street + ' (' + sideShort(top.curb) + ') at ' + fmtTime(openAt),
-        start: st.toISOString(),
-        end: new Date(openAt.getTime() + s.searchMinutes * P.MIN).toISOString(),
-        location: P.curbLabel(top.curb) + ', ' + span(top.curb) + ', Boston, MA',
-        description: 'Sweeping on ' + P.curbLabel(top.curb) + ' ends at ' + fmtTime(openAt) +
-          ', so the curb opens up. Parking there is good until ' + fmtWhen(top.until) + '.\n\n' +
-          'Ranked options:\n' + lines.join('\n') + '\n\n' +
-          'Current spot: ' + P.curbLabel(car) + ', must move by ' + fmtWhen(p.deadline) + '.\n' +
-          'Log the new spot when parked: ' + appUrl(),
-        reminders: [30, eveningBefore(st)]
-      });
-    }
-    if (p.deadline) {
-      var dl = p.deadline;
-      var sweep = P.nextSweep(car, new Date(dl.getTime() - P.MIN), opts());
-      var dlEnd = sweep ? sweep.end : new Date(dl.getTime() + 4 * P.HOUR);
-      events.push({
-        title: 'Car deadline: sweeping on ' + car.street + ' at ' + fmtTime(dl),
-        start: new Date(dl.getTime() - 60 * P.MIN).toISOString(),
-        end: dl.toISOString(),
-        location: P.curbLabel(car) + ', ' + span(car) + ', Boston, MA',
-        description: 'Backstop reminder. The car is on ' + P.curbLabel(car) + ', swept ' +
-          fmtWhen(dl) + ' to ' + fmtTime(dlEnd) + '. If it has not moved yet, move it now.\n\n' + appUrl(),
-        reminders: [60, eveningBefore(new Date(dl.getTime() - 60 * P.MIN))]
-      });
-    }
-    return events;
-  }
-
-  // Minutes from 8 PM the evening before to the event start.
-  function eveningBefore(start) {
-    var p = P.etParts(start);
-    var prev = P.etDate(p.y, p.m, p.d, 20, 0);
-    prev = new Date(prev.getTime() - P.DAY);
-    return Math.max(30, Math.round((start - prev) / P.MIN));
-  }
-
-  function sideShort(c) {
-    return c.side === 'Odd' || c.side === 'Even' ? c.side.toLowerCase() + ' side' : c.side.toLowerCase();
-  }
+  // ------------------------------------------------------------ plan
+  function computePlan() { return E.plan(Object.assign(ctx(), { now: new Date() })); }
 
   function icsFor(events) {
     function t(iso) { return iso.replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
@@ -503,7 +461,7 @@
   }
 
   function downloadIcs() {
-    var events = state.events && state.events.length ? state.events : buildEvents(plan);
+    var events = state.events && state.events.length ? state.events : E.buildEvents(plan, ctx());
     if (!events.length) { toast('Nothing to add yet. Save where the car is first.'); return; }
     var blob = new Blob([icsFor(events)], { type: 'text/calendar' });
     var a = document.createElement('a');
@@ -517,14 +475,18 @@
     if (!data) return;
     plan = computePlan();
     renderCar();
+    renderFeedback();
+    renderNextMove();
     renderMoves();
+    renderTrips();
     renderCalendar();
     renderSnow();
     renderConnect();
     paintMap();
     $('footnote').innerHTML = 'Schedule: City of Boston open data (retrieved ' + esc(String(data.sourceUpdated).slice(0, 10)) +
-      '). Beacon Hill residential sweeping runs Mar 1 to Dec 31; holidays are not excluded. Always check the posted sign. ' +
-      'Metered and nightly-swept curbs are shown dashed and never recommended.';
+      '). Beacon Hill residential sweeping runs Mar 1 to Dec 31. City holidays are flagged but still counted. ' +
+      (restrictions ? 'Moving-truck permits updated ' + esc(fmtWhen(new Date(restrictions.generated))) + '. ' : '') +
+      'Always check the posted sign. Metered and nightly-swept curbs are shown dashed and never recommended.';
   }
 
   function renderCar() {
@@ -539,47 +501,114 @@
     var when = st.state === 'sweeping' ? 'Sweeping now until ' + fmtTime(st.next.end)
       : st.next ? 'Next sweep ' + fmtWhen(st.next.start) : 'No sweeping until spring';
     var pill = st.state === 'sweeping' ? 'Move now' : st.next ? 'in ' + fmtSpan(st.next.start - now) : 'Clear';
-    var snowWarn = settings().snowEmergency && car.snowArtery
-      ? '<div class="banner alert" style="margin:12px 0 0">Snow emergency: this is a snow route. Move the car now.</div>' : '';
+    var notes = [];
+    if (settings().snowEmergency && car.snowArtery) {
+      notes.push('<div class="banner alert">Snow emergency: this is a snow route. Move the car now.</div>');
+    }
+    if (st.next && st.next.holiday) {
+      notes.push('<div class="banner note">' + esc(st.next.holiday) + ': the City sometimes suspends sweeping on holidays. Check the posted sign before skipping the move.</div>');
+    }
+    var permits = permitsFor(car.id, now, st.next ? st.next.start : new Date(now.getTime() + 14 * P.DAY));
+    if (permits.length) notes.push('<div class="banner note">' + esc(permitText(permits)) + ' on this block. Look for posted no-parking signs near the car.</div>');
+    var opp = E.oppositeCurb(data.curbs, car);
+    var confirmBox = state.car.confirmed === false
+      ? '<div class="confirm-side"><span>Logged automatically' + (state.car.by ? ' from ' + esc(state.car.by) + '\'s phone' : '') +
+        '. Right side of the street?</span><div class="row"><button class="btn small primary" id="btn-side-ok">Yes</button>' +
+        (opp ? '<button class="btn small" id="btn-side-switch">No, ' + esc(E.sideShort(opp)) + '</button>' : '') + '</div></div>'
+      : '';
     var parked = new Date(state.car.parkedAt);
+    var where = state.car.address ? 'Near ' + state.car.address : span(car);
     el.innerHTML = '<div class="label">Your car</div>' +
       '<div class="street">' + esc(P.curbLabel(car)) + '</div>' +
-      '<div class="meta">' + esc(span(car)) + '. Parked ' + esc(fmtWhen(parked)) + (state.car.by ? ' by ' + esc(state.car.by) : '') + '.</div>' +
+      '<div class="meta">' + esc(where) + '. Parked ' + esc(fmtWhen(parked)) + (state.car.by ? ' by ' + esc(state.car.by) : '') + '.' +
+      (state.car.lat ? ' <a class="link" target="_blank" rel="noopener" href="' + walkLink(state.car.lat, state.car.lng) + '">Walk to car</a>' : '') + '</div>' +
       '<div class="meta">' + esc(P.describe(car, settings())) + '</div>' +
+      confirmBox +
       '<div class="status-row"><span class="when">' + esc(when) + '</span><span class="pill ' + pillClass(st) + '">' + esc(pill) + '</span></div>' +
-      snowWarn;
+      notes.join('');
+    if ($('btn-side-ok')) $('btn-side-ok').onclick = function () { confirmSide(null); };
+    if ($('btn-side-switch')) $('btn-side-switch').onclick = function () { confirmSide(opp); };
+  }
+
+  function renderFeedback() {
+    var el = $('feedback'), car = state.car;
+    var recent = car && Date.now() - new Date(car.parkedAt) < 3 * P.DAY;
+    el.hidden = !(recent && car.searchMin == null && !skipped[car.parkedAt]);
+    if (el.hidden) return;
+    el.innerHTML = '<b>How long did it take to find this spot?</b>' +
+      '<div class="muted small" style="margin:3px 0 9px">One tap. Over time this teaches the app which curbs are actually easy to get.</div>' +
+      '<div class="chips">' + E.SEARCH_BUCKETS.map(function (b) {
+        return '<button class="chip-btn" data-min="' + b.min + '">' + esc(b.label) + '</button>';
+      }).join('') + '<button class="chip-btn ghost" data-min="skip">Skip</button></div>';
+    el.querySelectorAll('[data-min]').forEach(function (b) {
+      b.onclick = function () {
+        if (b.dataset.min === 'skip') { skipped[car.parkedAt] = 1; saveJSON('bp.skipped', skipped); render(); return; }
+        sendFeedback(+b.dataset.min);
+      };
+    });
+  }
+
+  function renderNextMove() {
+    var el = $('next-move');
+    var mv = state.car ? E.nextMove(plan) : null;
+    el.hidden = !mv;
+    if (!mv) return;
+    var claim = E.activeClaim(state, plan);
+    var mine = claim && claim.by === (cfg.name || '');
+    var when = mv.kind === 'fresh' ? fmtWhen(mv.at) : 'Now';
+    el.innerHTML = '<div class="row between"><div><div class="label">' + (plan.trip ? 'Before your trip' : 'Next move') + '</div>' +
+      '<div class="nm-title">' + esc(when) + ': ' + esc(mv.curb.street) + ', ' + esc(E.sideShort(mv.curb)) + '</div>' +
+      '<div class="muted small">' + (claim ? esc(claim.by) + (mine ? ' (you)' : '') + ' is moving it.' : 'Nobody has claimed this move yet.') + '</div></div>' +
+      (claim ? '<button class="btn small" id="btn-unclaim">' + (mine ? 'Release' : 'Take over') + '</button>'
+        : '<button class="btn small primary" id="btn-claim">I\'ll move it</button>') + '</div>';
+    if ($('btn-claim')) $('btn-claim').onclick = function () { claimMove(mv); };
+    if ($('btn-unclaim')) $('btn-unclaim').onclick = function () {
+      if (mine) { state.claim = null; commit('unclaim', {}, 'Released. The other person will be nudged if nobody claims it.'); }
+      else claimMove(mv);
+    };
+  }
+
+  function claimMove(mv) {
+    if (!cfg.name) { toast('Add your name in Settings first.'); return; }
+    state.claim = { by: cfg.name, moveKey: E.moveKey(mv), at: new Date().toISOString() };
+    commit('claim', { moveKey: state.claim.moveKey }, 'You have it. The invite now says ' + cfg.name + ' is moving the car.');
   }
 
   function renderMoves() {
-    var list = moveList(), el = $('moves'), sub = $('moves-sub');
+    var list = E.moveList(plan), el = $('moves'), sub = $('moves-sub');
     if (!state.car) {
       sub.textContent = '';
       el.innerHTML = '<li class="empty">Save where the car is and the best next spots show up here.</li>';
       return;
     }
     if (plan.mustMoveNow) sub.textContent = 'Move now';
+    else if (plan.trip) sub.textContent = plan.trip.covered ? 'Spots that last your trip first' : 'Nothing lasts the whole trip';
     else if (plan.options.length) sub.textContent = 'Right after a sweep ends';
     else sub.textContent = plan.deadline ? 'No fresh openings before your deadline' : '';
     if (!list.length) {
       el.innerHTML = '<li class="empty">' + (plan.deadline
-        ? 'No better spot opens before ' + esc(fmtWhen(plan.deadline)) + '. Stay put.'
+        ? 'No better spot opens before ' + esc(fmtWhen(plan.leaveBy || plan.deadline)) + '. Stay put.'
         : 'No sweeping on your curb this season. Stay put.') + '</li>';
       return;
     }
     el.innerHTML = list.map(function (o, i) {
       var gainDays = Math.round((o.until - o.at) / P.DAY);
-      var supply = o.supplyM >= 1500 ? 'Lots of curb opening' : o.supplyM >= 700 ? 'Some curb opening' : o.kind === 'fresh' ? 'Small opening' : '';
+      var ease = o.learnedN ? 'Easy ' + Math.round(o.ease * 100) + '% (from ' + o.learnedN + ' logged)' :
+        o.supplyM >= 1500 ? 'Lots of curb opening' : o.supplyM >= 700 ? 'Some curb opening' : o.kind === 'fresh' ? 'Small opening' : '';
       var facts = [
         '<span class="chip good">Good for ' + gainDays + ' days</span>',
-        state.home ? '<span class="chip">' + walkText(o.walkM) + '</span>' : '',
-        supply ? '<span class="chip">' + supply + '</span>' : '',
+        o.coversTrip === true ? '<span class="chip good">Lasts your trip</span>' : '',
+        o.coversTrip === false ? '<span class="chip warn">Ends mid-trip</span>' : '',
+        state.home ? '<span class="chip">' + E.walkText(o.walkM) + '</span>' : '',
+        ease ? '<span class="chip">' + esc(ease) + '</span>' : '',
+        o.permits && o.permits.length ? '<span class="chip warn">Moving truck ' + esc(fmtDay(new Date(o.permits[0].to))) + '</span>' : '',
         o.winterArtery ? '<span class="chip warn">Snow route</span>' : ''
       ].join('');
       return '<li class="move' + (selectedMove === i ? ' selected' : '') + '" data-i="' + i + '">' +
         '<div class="rank">' + (i + 1) + '</div><div>' +
         '<div class="title">' + esc(P.curbLabel(o.curb)) + '</div>' +
         '<div class="when">' + (o.kind === 'fresh' ? 'Opens ' + esc(fmtWhen(o.at)) : 'Open now') +
-        '<span class="muted">. Next sweep ' + esc(fmtDay.format(o.until)) + '</span></div>' +
+        '<span class="muted">. Next sweep ' + esc(fmtDay(o.until)) + '</span></div>' +
         '<div class="muted small">' + esc(span(o.curb)) + '</div>' +
         '<div class="facts">' + facts + '</div></div></li>';
     }).join('');
@@ -587,33 +616,98 @@
 
   function selectMove(i) {
     selectedMove = i;
-    var o = moveList()[i];
+    var o = E.moveList(plan)[i];
     if (!o) return;
     map.fitBounds(L.polyline(o.curb.line.map(ll)).getBounds(), { padding: [60, 60], maxZoom: 18, animate: false });
     highlight(o.curb);
     renderMoves();
   }
 
+  // ------------------------------------------------------------ trips
+  function renderTrips() {
+    var el = $('trips-card'), now = new Date();
+    var trips = (state.trips || []).filter(function (t) { return new Date(t.end) > now; })
+      .sort(function (a, b) { return new Date(a.start) - new Date(b.start); });
+    var next = P.nextTrip(trips, now);
+    var rows = trips.map(function (t) {
+      var status = '';
+      if (next && t.id === next.id && state.car) {
+        if (plan.tripOk && plan.tripOk.id === t.id) {
+          status = '<div class="trip-status ok">Covered. The car is good where it is through your return.</div>';
+        } else if (plan.trip) {
+          var mv = E.nextMove(plan), L1 = plan.trip.longest;
+          status = plan.trip.covered && mv
+            ? '<div class="trip-status ok">Move before you leave: ' + esc(P.curbLabel(mv.curb)) + ', ' +
+              (mv.kind === 'fresh' ? 'opens ' + esc(fmtWhen(mv.at)) : 'any time before you go') + '. Good until ' + esc(fmtWhen(mv.until)) + '.</div>'
+            : '<div class="trip-status warn">No curb lasts the whole trip (every-other-week streets top out near two weeks). ' +
+              (L1 ? 'Longest option: ' + esc(P.curbLabel(L1.curb)) + ', good until ' + esc(fmtWhen(L1.until)) + '. Someone would need to move it by then, or use a garage: ' : 'Consider a garage: ') +
+              esc(data.snowGarages.map(function (g) { return g.name; }).join(', ')) + '.</div>';
+        } else if (new Date(t.start) <= now) {
+          status = '<div class="trip-status ok">Trip in progress. No move invites until you are back.</div>';
+        }
+      } else if (next && t.id !== next.id) {
+        status = '<div class="trip-status muted">Planned after your next trip.</div>';
+      }
+      return '<li><div class="row between"><div><b>' + esc(t.note || 'Trip') + '</b><div class="muted small">' +
+        esc(fmtWhen(new Date(t.start))) + ' to ' + esc(fmtWhen(new Date(t.end))) + '</div></div>' +
+        '<button class="btn small ghost" data-trip="' + esc(t.id) + '">Remove</button></div>' + status + '</li>';
+    }).join('');
+    el.innerHTML = '<h4>Trips</h4>' +
+      '<div class="muted small" style="margin-bottom:8px">Add time away and the plan works around it: it finds a curb that lasts until you are back, and no invites land mid-trip.</div>' +
+      (rows ? '<ul class="trips">' + rows + '</ul>' : '') +
+      '<details class="trip-add"><summary>Add a trip</summary>' +
+      '<label class="field"><span>Name</span><input id="trip-note" placeholder="e.g. Thanksgiving in NYC" autocomplete="off"></label>' +
+      '<label class="field"><span>Leave</span><input id="trip-start" type="datetime-local"></label>' +
+      '<label class="field"><span>Back</span><input id="trip-end" type="datetime-local"></label>' +
+      '<button class="btn small primary" id="btn-trip-add">Save trip</button></details>';
+    el.querySelectorAll('[data-trip]').forEach(function (b) {
+      b.onclick = function () {
+        var id = b.dataset.trip;
+        state.trips = state.trips.filter(function (t) { return t.id !== id; });
+        commit('tripRemove', { id: id }, 'Trip removed.');
+      };
+    });
+    $('btn-trip-add').onclick = addTrip;
+  }
+
+  function addTrip() {
+    var s = $('trip-start').value, e = $('trip-end').value;
+    if (!s || !e) { toast('Pick when you leave and when you are back.'); return; }
+    var start = localInputToDate(s), end = localInputToDate(e);
+    if (!(end > start)) { toast('The return has to be after you leave.'); return; }
+    var trip = { id: 'local' + Date.now(), start: start.toISOString(), end: end.toISOString(), note: $('trip-note').value.trim() };
+    state.trips = (state.trips || []).concat([trip]);
+    commit('tripAdd', { trip: trip }, 'Trip saved. The plan now works around it.');
+  }
+
+  // datetime-local values are Boston wall-clock time.
+  function localInputToDate(v) {
+    var m = v.match(/(\d+)-(\d+)-(\d+)T(\d+):(\d+)/);
+    return P.etDate(+m[1], +m[2], +m[3], +m[4], +m[5]);
+  }
+
+  // ------------------------------------------------------------ calendar, snow, settings
   function renderCalendar() {
     var el = $('cal-card'), ev = state.events || [];
     var upcoming = ev.filter(function (e) { return new Date(e.end) > new Date(); });
+    var stats = E.searchStats(state.history);
     var head = '<h4>Calendar</h4>';
     var body = upcoming.length
       ? '<ul>' + upcoming.map(function (e) { return '<li>' + esc(fmtWhen(new Date(e.start))) + ': ' + esc(e.title) + '</li>'; }).join('') + '</ul>'
       : '<p class="muted small" style="margin:0">No reminders scheduled.</p>';
+    var statLine = stats.n
+      ? '<p class="small" style="margin:10px 0 0"><b>Search time:</b> median ' + Math.round(stats.medianRecent) + ' min over your last ' +
+        Math.min(stats.n, 10) + ' logged moves' + (stats.targetTries ? '; got the suggested curb ' + stats.targetHits + ' of ' + stats.targetTries + ' times' : '') + '.</p>'
+      : '';
     var foot = synced()
       ? '<p class="muted small" style="margin:10px 0 0">Invites go to both calendars automatically each time the car is saved.' +
         (state.updatedAt ? ' Last update ' + esc(fmtWhen(new Date(state.updatedAt))) + (state.updatedBy ? ' by ' + esc(state.updatedBy) : '') + '.' : '') + '</p>' +
         '<div class="row" style="margin-top:10px"><button class="btn small" id="btn-resend">Recalculate and resend</button><button class="btn small" id="btn-ics">Add to this phone</button></div>'
       : '<p class="muted small" style="margin:10px 0 0">Shared sync is off, so invites are not sent automatically. Set it up in Settings, or add these to this phone now.</p>' +
         '<div class="row" style="margin-top:10px"><button class="btn small" id="btn-ics">Add to calendar</button></div>';
-    el.innerHTML = head + body + foot;
+    el.innerHTML = head + body + statLine + foot;
     $('btn-ics').onclick = downloadIcs;
-    if ($('btn-resend')) $('btn-resend').onclick = function () {
-      plan = computePlan();
-      state.events = buildEvents(plan);
-      commit('plan', { events: state.events }, 'Calendar updated.');
-    };
+    if ($('btn-resend')) $('btn-resend').onclick = function () { commit('plan', {}, 'Calendar updated.'); };
   }
 
   function renderSnow() {
@@ -621,17 +715,19 @@
     var garages = data.snowGarages.map(function (g) {
       return '<li><b>' + esc(g.name) + '</b>, ' + esc(g.address) + ': ' + esc(g.fee) + '</li>';
     }).join('');
+    var auto = state.snow && state.snow.auto;
     el.innerHTML = '<div class="switch-row"><div><h4>Snow emergency</h4>' +
-      '<div class="muted small">Flip on when the City declares one. Snow routes (blue dashes) are then excluded and the car gets a move-now alert if it is on one.</div></div>' +
+      '<div class="muted small">' + (synced()
+        ? 'Turns on by itself when boston.gov posts a snow emergency banner (checked every 15 minutes), and you both get an email. You can also flip it yourself.'
+        : 'Flip on when the City declares one.') +
+      ' Snow routes (blue dashes) are then excluded and the car gets a move-now alert if it is on one.</div></div>' +
       '<label class="toggle"><input type="checkbox" id="snow-toggle"' + (s.snowEmergency ? ' checked' : '') + '><span></span></label></div>' +
-      (s.snowEmergency ? '<p class="small" style="margin:12px 0 0">Discounted garages for Beacon Hill residents (City list; confirm rates):</p><ul>' + garages + '</ul>' : '') +
-      '<p class="muted small" style="margin:10px 0 0">The City announces snow emergencies through AlertBoston and boston.gov/snow.</p>';
+      (auto ? '<p class="small" style="margin:10px 0 0">Detected automatically: "' + esc(state.snow.text || 'snow emergency') + '"</p>' : '') +
+      (s.snowEmergency ? '<p class="small" style="margin:12px 0 0">Discounted garages for Beacon Hill residents (City list; confirm rates):</p><ul>' + garages + '</ul>' : '');
     $('snow-toggle').onchange = function (e) {
       state.settings = Object.assign({}, state.settings, { snowEmergency: e.target.checked });
-      plan = computePlan();
-      state.events = buildEvents(plan);
-      commit('settings', { settings: state.settings, events: state.events },
-        e.target.checked ? 'Snow emergency on. Plan updated.' : 'Snow emergency off.');
+      if (!e.target.checked) state.snow = null;
+      commit('settings', { settings: state.settings }, e.target.checked ? 'Snow emergency on. Plan updated.' : 'Snow emergency off.');
     };
     var b = $('snow-banner');
     b.hidden = !s.snowEmergency;
@@ -649,6 +745,31 @@
     $('set-key').value = cfg.key || '';
     $('home-label').textContent = state.home ? 'Set (' + state.home[1].toFixed(4) + ', ' + state.home[0].toFixed(4) + ')' : 'Not set';
     setSyncStatus(synced() ? 'Connected. Changes sync between phones.' : 'Not connected. Data stays on this phone.');
+    renderShortcutHelp();
+  }
+
+  function renderShortcutHelp() {
+    var el = $('shortcut-help');
+    if (!synced()) { el.innerHTML = '<p class="muted small">Connect this phone first (paste your setup link above).</p>'; return; }
+    function copy(label, value, secret) {
+      return '<div class="copy-row"><span>' + label + '</span><code>' + esc(secret ? value.slice(0, 4) + '...' : value) +
+        '</code><button class="btn small" data-copy="' + esc(value) + '">Copy</button></div>';
+    }
+    el.innerHTML = '<p class="small">When your phone disconnects from the car, this logs where you parked without opening the app. ' +
+      'You then confirm the side of the street with one tap. Build it once in the Shortcuts app:</p>' +
+      '<ol class="steps small">' +
+      '<li>Shortcuts, then <b>Automation</b>, then <b>+</b>, then <b>Bluetooth</b> (or <b>CarPlay</b>). Choose your car, then <b>Is Disconnected</b>, then <b>Run Immediately</b>, then <b>Next</b>, then <b>New Blank Automation</b>.</li>' +
+      '<li>Add <b>Get Current Location</b>.</li>' +
+      '<li>Add <b>Get Contents of URL</b>. Paste the URL below. Tap the arrow: Method <b>POST</b>, Request Body <b>JSON</b>. Add text fields <b>action</b> = <code>parkGps</code>, <b>reply</b> = <code>text</code>, <b>key</b> and <b>by</b> from below. Add number fields <b>lat</b> and <b>lng</b>; for each, tap the value, choose Current Location, then Latitude (or Longitude).</li>' +
+      '<li>Add <b>Show Notification</b> with <b>Contents of URL</b> as the text. Tap Done.</li></ol>' +
+      copy('URL', cfg.api) + copy('key', cfg.key, true) + copy('by', cfg.name || 'Your name') +
+      '<p class="muted small">If the phone also connects to the car while you are a passenger, the log may be wrong; the confirm prompt catches that.</p>';
+    el.querySelectorAll('[data-copy]').forEach(function (b) {
+      b.onclick = function () {
+        (navigator.clipboard ? navigator.clipboard.writeText(b.dataset.copy) : Promise.reject())
+          .then(function () { toast('Copied.'); }, function () { prompt('Copy this:', b.dataset.copy); });
+      };
+    });
   }
 
   function saveSettings() {
@@ -667,12 +788,9 @@
       walkMinutes: clamp(+$('set-walk').value, 3, 25, 12),
       skipFifthWeek: $('set-fifth').checked
     });
-    var changed = JSON.stringify(next) !== JSON.stringify(state.settings);
     state.settings = next;
     $('settings').hidden = true;
-    plan = computePlan();
-    if (changed && state.car) state.events = buildEvents(plan);
-    var p = commit('settings', { settings: state.settings, events: changed && state.car ? state.events : undefined }, 'Settings saved.');
+    var p = commit('settings', { settings: state.settings }, 'Settings saved.');
     if (synced()) p.then(pull);
   }
 
@@ -683,7 +801,7 @@
     var t = $('toast');
     t.textContent = msg; t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.hidden = true; }, 3600);
+    toastTimer = setTimeout(function () { t.hidden = true; }, msg.length > 90 ? 9000 : 3600);
   }
 
   // ------------------------------------------------------------ wire up
@@ -693,6 +811,7 @@
     $('btn-settings').onclick = function () { renderSettings(); $('settings').hidden = false; };
     $('btn-close-settings').onclick = function () { $('settings').hidden = true; };
     $('btn-save-settings').onclick = saveSettings;
+    $('btn-test').onclick = testConnection;
     $('btn-home-here').onclick = function () {
       locate().then(function (latlng) { setHome([+latlng.lng.toFixed(6), +latlng.lat.toFixed(6)]); })
         .catch(function (e) { toast(e.message); });
@@ -731,9 +850,12 @@
     readSetupLink();
     var load = window.BP_DATA ? Promise.resolve(window.BP_DATA)
       : fetch('data/segments.json').then(function (r) { return r.json(); });
-    load.then(function (d) {
-      data = d;
-      d.curbs.forEach(function (c) { curbsById[c.id] = c; });
+    var perms = fetch('data/restrictions.json', { cache: 'no-cache' })
+      .then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; });
+    Promise.all([load, perms]).then(function (res) {
+      data = res[0];
+      restrictions = res[1];
+      data.curbs.forEach(function (c) { curbsById[c.id] = c; });
       initMap();
       wire();
       render();

@@ -28,3 +28,33 @@ assert(winter.options.every(o => o.until > winter.deadline), 'winter: no move th
 
 const snow = P.rank({ curbs: D.curbs, now: new Date('2027-01-10T15:00:00Z'), home, car: { curbId: 519 }, settings: { snowEmergency: true }, season });
 assert(snow.mustMoveNow && snow.fallback.length > 0 && snow.fallback.every(o => !o.curb.snowArtery), 'snow emergency on a snow route: move now, off snow routes');
+
+// Trips, learning, permits, holidays
+const E = require('../app/engine.js');
+const base = { car: { curbId: 421, parkedAt: '2026-10-30T14:00:00Z' }, home, settings: {}, history: [] };
+const now0 = new Date('2026-10-30T14:00:00Z');
+let st = Object.assign({}, base, { trips: [{ id: 'a', start: '2026-11-03T13:00:00Z', end: '2026-11-20T23:00:00Z' }] });
+let tp = E.plan({ data: D, state: st, now: now0 });
+assert(tp.trip && +tp.leaveBy === +new Date('2026-11-03T13:00:00Z'), 'trip that outlasts the curb moves the deadline to departure');
+assert(!tp.trip.covered && E.moveList(tp)[0].until >= Math.max(...E.moveList(tp).map(o => +o.until)), 'uncovered trip: longest-lasting spot ranks first');
+assert(E.moveList(tp).every(o => o.at < tp.leaveBy), 'every trip option happens before departure');
+st = Object.assign({}, base, { trips: [{ id: 'b', start: '2026-11-07T13:00:00Z', end: '2026-11-10T23:00:00Z' }] });
+tp = E.plan({ data: D, state: st, now: now0 });
+assert(tp.trip.covered && E.moveList(tp)[0].coversTrip, 'short trip: top option lasts the whole trip');
+st = Object.assign({}, base, { trips: [{ id: 'c', start: '2026-11-01T13:00:00Z', end: '2026-11-03T23:00:00Z' }] });
+tp = E.plan({ data: D, state: st, now: now0 });
+assert(tp.tripOk && !tp.trip, 'trip the car already outlasts needs no move');
+assert(E.moveList(tp).every(o => !(o.at >= new Date('2026-11-01T13:00:00Z') && o.at <= new Date('2026-11-03T23:00:00Z'))), 'no move suggested while away');
+
+const plain = E.plan({ data: D, state: Object.assign({}, base, { trips: [] }), now: now0 });
+const topId = E.moveList(plain)[0].curb.id;
+const hard = Object.assign({}, base, { trips: [], history: [1, 2, 3, 4].map(i => ({ curbId: topId, searchMin: 75, parkedAt: 'h' + i })) });
+assert(E.moveList(E.plan({ data: D, state: hard, now: now0 }))[0].curb.id !== topId, 'logged slow searches push a curb down');
+
+const permitR = { permits: [{ id: 'p1', curbId: topId, from: '2026-11-04T05:00:00Z', to: '2026-11-06T04:59:00Z' }] };
+const withPermit = E.moveList(E.plan({ data: D, state: Object.assign({}, base, { trips: [] }), restrictions: permitR, now: now0 }));
+const hit = withPermit.find(o => o.curb.id === topId);
+assert(!hit || hit.permits.length === 1, 'permit overlapping a stay is attached to the option');
+assert(withPermit[0].curb.id !== topId, 'a moving-truck permit on the top curb drops it');
+
+assert(P.holidayName(new Date('2026-11-26T17:00:00Z')) === 'Thanksgiving' && P.holidayName(new Date('2026-07-03T16:00:00Z')) === 'Independence Day', 'holidays computed, including observed dates');

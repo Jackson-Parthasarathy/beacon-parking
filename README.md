@@ -1,8 +1,10 @@
 # Beau on Beacon Hill
 
 A phone web app for Beacon Hill street cleaning. It knows every Beacon Hill
-curb's sweeping schedule, keeps track of where the car is, ranks where to move
-it next, and sends calendar invites to both of you for when to move it.
+curb's sweeping schedule, keeps track of where the car is (automatically, if
+you set up the iPhone Shortcut), ranks where to move it next, lets you and
+Caroline claim who is moving it, plans around trips, and sends calendar
+invites to both of you.
 
 ## How it decides where to move
 
@@ -17,57 +19,64 @@ the time you need to search, 60 minutes by default) and ranks them by:
 1. **How long you can stay** (half the score): the date of that curb's next sweep.
    A move only counts if it outlasts staying where you are.
 2. **Walking distance from home** (a quarter).
-3. **How much curb opens at the same time nearby** (a quarter): more open curb
-   means better odds.
+3. **How easy the curb is to get** (a quarter). It starts as how much curb
+   opens nearby at the same moment, and shifts toward your own logged search
+   times as they come in ("How long did it take?" after each park). Missing a
+   suggested curb counts against it.
 
 It never recommends metered curbs, curbs swept every night, or (during a
-declared snow emergency) snow routes. If a sweep or snow emergency means the
-car has to move now, it switches to the best curbs that are open right now.
+snow emergency) snow routes, and it marks down curbs with a moving-truck
+permit during your stay. If the car has to move now, it switches to the best
+curbs open right now.
 
-Two calendar events go out each time the car is saved:
+**Trips:** add time away and the plan moves your deadline up to departure,
+puts curbs that last the whole trip first, and never schedules a move while
+you are away. If nothing lasts the whole trip (every-other-week streets top
+out near two weeks), it picks the longest-lasting spot and says so a week
+ahead.
+
+## Calendar and nudges
+
+Each time the car is saved, two invites go to both calendars:
 
 - **Move car to X at 12:00 PM**: starts 10 minutes before the top pick opens.
-  Its notes list the backup options.
-- **Car deadline**: the hour before your current curb gets swept, in case the
-  first event was missed.
+  Its notes list the backup options. When one of you taps "I'll move it", the
+  same invite is renamed "Caroline moves car to X" (one update, no re-invite).
+- **Car deadline**: the hour before your current curb gets swept (or before
+  you leave on a trip), in case the first event was missed.
 
-Each event alerts you 30 minutes before (60 minutes for the deadline) and at
-8 PM the evening before.
+The Google script also checks every 15 minutes and emails you both, once per
+situation, when:
+
+- nobody has claimed tomorrow's move by 8 PM the night before,
+- the car is still logged on a curb that gets swept in the next 90 minutes, or
+  sweeping has started,
+- a trip a week out has no curb that lasts,
+- a moving-truck permit lands on the car's block,
+- boston.gov shows a snow emergency banner (the app's snow switch turns on by
+  itself, and off again when the banner is gone).
 
 ## Schedule rules it follows (City of Boston)
 
 - Beacon Hill daytime sweeping runs **March 1 to December 31**, not April to November.
 - Streets swept every other week are **not enforced in the 5th week** of a
   month. There is a setting to turn this off if a posted sign says otherwise.
-- City holidays are not excluded, so the app errs toward moving.
-- Data comes from Analyze Boston (sweeping schedule, street segments, address
-  points, meters, snow routes, snow garages). It is refreshed automatically on
-  the 1st of each month.
+- City holidays are flagged ("may be suspended") but still counted, so the app
+  errs toward moving.
+- Data comes from Analyze Boston: sweeping schedule, street segments, address
+  points, meters, snow routes and snow garages (refreshed on the 1st of each
+  month), and moving-truck permits (refreshed every 3 hours).
 
 The posted sign always wins.
 
-## Setup (about 20 minutes, once)
+## Setup
 
-### 1. Publish the app (GitHub Pages, free; done)
+### 1. The app (done)
 
-From this folder:
+Hosted free on GitHub Pages at https://jackson-parthasarathy.github.io/beacon-parking/
+from this repo. Every push redeploys within a minute.
 
-```bash
-gh repo create beacon-parking --public --source . --push
-```
-
-Then on GitHub, go to the repo's Settings, then Pages, set "Source" to
-**GitHub Actions**, and re-run the Deploy workflow (Actions tab). The app will
-be at `https://<username>.github.io/beacon-parking/`.
-
-The repo has to be public for free Pages. Nothing private goes in it: your
-home location and email addresses live only in your Google script.
-
-### 2. Shared sync and calendar invites (Google Apps Script, free)
-
-Do this from whichever of you has a Google account. The events live on that
-account's calendar, and everyone listed in `GUESTS` (for example the Outlook
-address) gets a real invite.
+### 2. Shared sync, invites and nudges (Google Apps Script, free)
 
 1. Fill in `backend/config.local.gs` (emails, names, home) and run
    `python backend/build_paste.py`. That writes `backend/config.local.Code.gs`,
@@ -84,10 +93,16 @@ address) gets a real invite.
    `/exec`).
 5. Paste that URL into `WEB_APP_URL` in the CONFIG at the top, save, choose
    `setup` in the function dropdown, and click Run. The execution log prints
-   one setup link per person.
+   one setup link per person, plus the values for the iPhone Shortcut, and
+   installs the 15-minute background check.
 
 Anyone with the URL can reach the web app, but it only responds to requests
 that carry the passphrase made in step 5.
+
+**Updating the script later:** paste the new `config.local.Code.gs` (and
+`appsscript.json` if it changed), then Deploy, then Manage deployments, the
+pencil, Version: **New version**, Deploy. That keeps the same URL. Run `setup`
+again afterward; it approves any new permissions and reinstalls the check.
 
 ### 3. Each phone
 
@@ -98,40 +113,43 @@ that carry the passphrase made in step 5.
    your setup link and tap Connect. (A home screen app keeps its own storage
    separate from the browser, which is why the link is pasted here.)
 4. Allow location when asked; that powers "I just parked here".
+5. Optional, recommended: Settings, then "Hands-free logging", and build the
+   Shortcut it describes (about 5 minutes). Then the car logs itself when
+   your phone disconnects from the car.
 
-Chrome works too, on iPhone, Android, or a laptop. Each browser connects
-separately with the same setup link.
+If sync fails, Settings, then "Shared sync", then **Test connection** says
+exactly what is wrong.
 
 ## Daily use
 
-- **Parked?** Tap "I just parked here" and confirm the side of the street. That
-  updates both phones and resends the invites.
-- **Map colors:** red means sweeping now, orange within 24 hours, yellow
-  within 3 days, green clear. Dashed gray curbs are metered or swept nightly.
-  Blue dashes are snow routes. Tap any curb for its schedule.
-- **Snow emergency:** flip the switch when the City declares one. Either of you
-  can flip it, and it updates both phones and the calendar.
+- **Parked?** With the Shortcut, it logs itself and the app asks "Right side
+  of the street?". Without it, tap "I just parked here". Either way both
+  phones update and the invites are resent.
+- **Next move:** tap "I'll move it" so the other person knows.
+- **After parking:** answer "How long did it take?" with one tap.
+- **Map:** red means sweeping now, orange within 24 hours, yellow within 3
+  days, green clear. Dashed gray curbs are metered or swept nightly. Blue
+  dashes are snow routes, orange squares are moving-truck permits. Tap any
+  curb for its schedule.
 
 ## Maintenance
 
 ```bash
-python tools/fetch_raw.py      # download City data to tools/raw/
-python tools/build_data.py     # rebuild app/data/segments.json
-node tools/test_planner.js     # schedule and ranking checks
-node tools/test_backend.js     # Apps Script logic with mocked Google services
+python tools/fetch_raw.py           # download City data to tools/raw/
+python tools/build_data.py          # rebuild app/data/segments.json
+python tools/fetch_restrictions.py  # moving-truck permits (also runs at deploy)
+node tools/test_planner.js          # schedule, ranking, trips, learning, permits
+node tools/test_backend.js          # Apps Script logic with mocked Google services
 ```
-
-When `Code.gs` changes, paste it into the Apps Script project again, then go
-to Deploy, then Manage deployments, then Edit, and pick a new version. That
-keeps the same URL.
 
 ## Files
 
 | Path | What it is |
 |---|---|
-| `app/` | The web app (Leaflet map, planner, offline cache) |
+| `app/` | The web app (Leaflet map, offline cache) |
 | `app/planner.js` | Sweep schedule math and the ranking |
-| `app/data/segments.json` | 61 Beacon Hill curbs with schedules and map lines |
-| `backend/Code.gs` | Shared state and calendar invites (Apps Script) |
+| `app/engine.js` | Events, claims, trips, learning, curb lookups (shared with the backend) |
+| `app/data/segments.json` | 61 Beacon Hill curbs with schedules, map lines and house numbers |
+| `backend/Code.gs` | Shared state, invites, Shortcut endpoint, nudges (Apps Script) |
 | `tools/` | Data pipeline and tests |
-| `.github/workflows/pages.yml` | Deploy plus monthly data refresh |
+| `.github/workflows/pages.yml` | Deploy, permits every 3 hours, monthly schedule refresh |

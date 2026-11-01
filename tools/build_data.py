@@ -114,11 +114,16 @@ for s in segs:
     by_name[s["name"]].append(s)
 
 addr_by_street = defaultdict(list)
+addr_numbers = defaultdict(dict)   # street -> house number -> Point
 for f in json.load(open(RAW / "addresses.geojson"))["features"]:
     p = f["properties"]
     if f["geometry"] and p.get("STREET_NUMBER"):
-        addr_by_street[norm(p["FULL_STREET_NAME"])].append(
-            (Point(to_m(*f["geometry"]["coordinates"])), parity(p["STREET_NUMBER"])))
+        pt = Point(to_m(*f["geometry"]["coordinates"]))
+        street_key = norm(p["FULL_STREET_NAME"])
+        addr_by_street[street_key].append((pt, parity(p["STREET_NUMBER"])))
+        num = str(p["STREET_NUMBER"]).strip()
+        if re.fullmatch(r"\d+[A-Z]?", num):
+            addr_numbers[street_key].setdefault(num, pt)
 
 meters_by_street = defaultdict(list)
 for f in json.load(open(RAW / "meters.geojson"))["features"]:
@@ -260,6 +265,19 @@ def address_side(path_line, street, side):
     return (1 if votes > 0 else -1) if votes else 0
 
 
+def curb_addresses(line, street, side):
+    """House numbers along this curb (matching parity), for "near 42 Chestnut St"."""
+    out = []
+    for num, pt in addr_numbers.get(street, {}).items():
+        if side in ("Odd", "Even") and parity(num) != side:
+            continue
+        along = line.project(pt)
+        if line.distance(pt) < 30 and 0 < along < line.length:
+            x, y = to_ll(pt.x, pt.y)
+            out.append([num, round(x, 5), round(y, 5)])
+    return sorted(out, key=lambda a: int(re.match(r"\d+", a[0]).group()))
+
+
 rows, problems, disagree = [], [], []
 for _, row in sweep.iterrows():
     street = norm(row.st_name)
@@ -321,6 +339,7 @@ for _, row in sweep.iterrows():
         "line": unproject(drawn.simplify(0.5).coords),
         "center": unproject([line.interpolate(0.5, normalized=True).coords[0]])[0],
         "sideDir": compass(line, drawn) if sign else "",
+        "addr": curb_addresses(line, street, side_raw),
     })
 
 # Same street, side, span and schedule appear twice in the source; keep one.

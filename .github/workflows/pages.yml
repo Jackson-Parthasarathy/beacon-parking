@@ -1,5 +1,6 @@
-# Publishes app/ to GitHub Pages on every push, and on the 1st of each month
-# re-pulls the City's sweeping schedule first so the app stays current.
+# Publishes app/ to GitHub Pages on every push. Every 3 hours it redeploys
+# with fresh moving-truck permits, and on the 1st of each month it also
+# re-pulls the City's sweeping schedule and commits the update.
 name: Deploy
 
 on:
@@ -7,7 +8,8 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    - cron: "0 9 1 * *"
+    - cron: "0 9 1 * *"      # monthly schedule refresh
+    - cron: "15 */3 * * *"   # permits
 
 permissions:
   contents: write
@@ -16,7 +18,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -27,8 +29,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Refresh City data
-        if: github.event_name != 'push'
+      - name: Refresh City schedule
+        if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 9 1 * *'
         run: |
           pip install --quiet pandas shapely pyproj
           python tools/fetch_raw.py
@@ -36,8 +38,11 @@ jobs:
           node tools/test_planner.js
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
-          git add app/data
+          git add app/data/segments.json app/data/segments.js
           git diff --cached --quiet || (git commit -m "Refresh street sweeping data" && git push)
+
+      - name: Moving-truck permits
+        run: python3 tools/fetch_restrictions.py || echo "Permit data unavailable; deploying without it"
 
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

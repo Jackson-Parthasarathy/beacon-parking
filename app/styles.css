@@ -312,3 +312,43 @@ details.field[open] summary { margin-bottom: 10px; }
   .legend { top: auto; bottom: 16px; left: 436px; }
   .topbar { left: 16px; }
 }
+
+/* Feedback, claims, trips, permits */
+.sq { display: inline-block; width: 9px; height: 9px; border-radius: 2px; }
+.sq.permit { background: var(--orange); border: 1.5px solid #fff; box-shadow: 0 0 0 1px var(--orange); }
+.pin.permit { width: 14px; height: 14px; border-radius: 3px; background: var(--orange); border-width: 2px; }
+.row.between { justify-content: space-between; flex-wrap: nowrap; align-items: center; }
+.label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); font-weight: 600; }
+.feedback { border-color: color-mix(in srgb, var(--green) 40%, transparent); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-btn {
+  appearance: none; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+  padding: 8px 12px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink);
+}
+.chip-btn.ghost { background: transparent; color: var(--muted); }
+.next-move { margin-bottom: 10px; border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.nm-title { font-weight: 650; font-size: 15px; margin: 2px 0; }
+.btn.ghost { background: transparent; }
+.confirm-side {
+  margin-top: 12px; padding: 10px 12px; border-radius: 12px; font-size: 14px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  display: grid; gap: 8px;
+}
+.car-card .banner { margin: 10px 0 0; }
+.banner.note { background: color-mix(in srgb, var(--amber) 14%, var(--surface)); border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent); font-size: 13px; }
+a.link { color: var(--accent); font-weight: 600; text-decoration: none; white-space: nowrap; }
+.trips { list-style: none; padding: 0; margin: 0 0 10px; }
+.trips li { padding: 10px 0; border-top: 1px solid var(--line); }
+.trips li:first-child { border-top: 0; padding-top: 2px; }
+.trip-status { margin-top: 6px; font-size: 13px; padding: 8px 10px; border-radius: 10px; }
+.trip-status.ok { background: color-mix(in srgb, var(--green) 12%, var(--surface)); }
+.trip-status.warn { background: color-mix(in srgb, var(--orange) 12%, var(--surface)); }
+.trip-status.muted { color: var(--muted); padding: 0; }
+.trip-add summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--accent); margin-bottom: 8px; }
+.trip-add .field input { width: 100%; font: inherit; font-size: 16px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); }
+.copy-row { display: grid; grid-template-columns: 40px 1fr auto; gap: 8px; align-items: center; margin: 6px 0; font-size: 13px; }
+.copy-row code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; background: var(--bg); padding: 4px 6px; border-radius: 6px; }
+.steps { padding-left: 18px; margin: 6px 0 10px; }
+.steps li { margin-bottom: 6px; }
