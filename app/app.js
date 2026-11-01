@@ -81,6 +81,8 @@
     'Who has access must be Anyone. Then use Settings, then Test connection.';
   var PAGE_HELP = 'Your Google script answered with a web page instead of data. In Apps Script, go to Deploy, ' +
     'then Manage deployments, click the pencil, choose New version, and Deploy.';
+  var OLD_CODE_HELP = 'Your Google script is running the old code, which cannot save more history. Paste the new ' +
+    'Code.gs, then Deploy, Manage deployments, pencil, New version, Deploy, and run setup.';
 
   function api(action, payload) {
     var body = Object.assign({ action: action, key: cfg.key, by: cfg.name || '' }, payload || {});
@@ -94,8 +96,14 @@
       .then(function (t) {
         var res;
         try { res = JSON.parse(t); } catch (e) { throw new Error(PAGE_HELP); }
-        if (!res.ok) throw new Error(res.error === 'wrong passphrase'
-          ? 'The passphrase does not match. Paste the latest setup link from the Apps Script log.' : res.error || 'Backend error');
+        if (!res.ok) {
+          var err = res.error || 'Backend error';
+          if (err === 'wrong passphrase') err = 'The passphrase does not match. Paste the latest setup link from the Apps Script log.';
+          // The first version of the script stored everything in one 9 KB
+          // property and fails once history grows past it.
+          else if (/too large|exceeded|maximum size/i.test(err)) err = OLD_CODE_HELP + ' (' + err + ')';
+          throw new Error(err);
+        }
         return res.state;
       });
   }
@@ -110,18 +118,66 @@
         var res;
         try { res = JSON.parse(t); } catch (e) { throw new Error(PAGE_HELP); }
         if (!res.ok || res.service !== 'beacon-parking') throw new Error('That URL is not the Beau backend.');
-        if (!res.version || res.version < 2) {
-          throw new Error('Reached the script, but it is running old code. Paste the new Code.gs, then deploy a New version.');
+        if (!res.version || res.version < 2) throw new Error(OLD_CODE_HELP);
+        if (outbox.length) {
+          return flush().then(function (ok) {
+            if (!ok) throw new Error('Reached the script, but saving failed: ' + syncError);
+            return null;
+          });
         }
         return api('state');
       })
-      .then(function (s) { adopt(s); setSyncStatus('Connected. The script, passphrase, and calendar sync all work.'); })
+      .then(function (s) {
+        if (s) adopt(s);
+        setSyncStatus('Connected. The script, passphrase, and saving all work.');
+      })
       .catch(function (e) { setSyncStatus(e.message); });
+  }
+
+  /* Changes go into an outbox that survives closing the app. Until the outbox
+     is empty, the phone's copy wins: a background pull never replaces a change
+     that has not reached the backend yet, and the outbox is retried on every
+     pull. */
+  var outbox = loadJSON('bp.outbox', []);
+  var syncError = loadJSON('bp.syncError', '');
+  var changeSeq = 0;
+  var flushing = null;
+  var REPLACES = { park: 1, confirm: 1, plan: 1, settings: 1, home: 1 };
+
+  function setSyncError(msg) {
+    syncError = msg || '';
+    saveJSON('bp.syncError', syncError);
+    renderSyncBanner();
+  }
+
+  function flush() {
+    if (flushing) return flushing;
+    if (!synced() || !outbox.length) return Promise.resolve(true);
+    var item = outbox[0];
+    flushing = api(item.action, item.body).then(function (s) {
+      outbox.shift();
+      saveJSON('bp.outbox', outbox);
+      flushing = null;
+      if (outbox.length) return flush();
+      setSyncError('');
+      adopt(s);
+      setSyncStatus('Synced ' + E.fmtTime(new Date()));
+      return true;
+    }, function (e) {
+      flushing = null;
+      setSyncError(e.message);
+      return false;
+    });
+    return flushing;
   }
 
   function pull() {
     if (!synced()) return Promise.resolve();
+    if (outbox.length) return flush();
+    var seq = changeSeq;
     return api('state').then(function (s) {
+      if (seq !== changeSeq || outbox.length) return;   // a newer local change is on its way
+      setSyncError('');
       adopt(s);
       setSyncStatus('Synced ' + E.fmtTime(new Date()));
     }).catch(function (e) {
@@ -139,18 +195,39 @@
   // Save locally first so the UI never waits on the network. The events the
   // phone computed go along as a fallback; the backend recomputes them.
   function commit(action, payload, msg) {
+    changeSeq++;
     plan = computePlan();
     state.events = E.buildEvents(plan, ctx());
     saveJSON('bp.state', state);
     render();
     if (!synced()) { if (msg) toast(msg); return Promise.resolve(); }
     var body = Object.assign({ events: state.events, plannedMove: state.plannedMove || null }, payload || {});
-    return api(action, body).then(function (s) {
-      adopt(s);
-      if (msg) toast(msg);
-    }).catch(function (e) {
-      toast('Saved on this phone only. ' + e.message);
+    // A newer park (or settings change) supersedes an unsent older one.
+    if (REPLACES[action]) outbox = outbox.filter(function (o) { return o.action !== action; });
+    outbox.push({ action: action, body: body, at: new Date().toISOString() });
+    saveJSON('bp.outbox', outbox);
+    return flush().then(function (ok) {
+      if (ok) { if (msg) toast(msg); }
+      else toast('Saved on this phone. Not shared yet; it will retry. ' + syncError);
     });
+  }
+
+  function renderSyncBanner() {
+    var el = $('sync-banner');
+    if (!el) return;
+    el.hidden = !(synced() && outbox.length && syncError);
+    if (el.hidden) return;
+    el.innerHTML = '<b>Not shared with the other phone yet.</b> Your change is saved here and will retry automatically.' +
+      '<div class="small" style="margin:6px 0 8px">' + esc(syncError) + '</div>' +
+      '<div class="row"><button class="btn small primary" id="btn-retry">Retry now</button>' +
+      '<button class="btn small" id="btn-sync-help">Test connection</button></div>';
+    $('btn-retry').onclick = function () {
+      $('btn-retry').disabled = true;
+      flush().then(function (ok) { toast(ok ? 'Shared. Both phones are up to date.' : 'Still failing. ' + syncError); });
+    };
+    $('btn-sync-help').onclick = function () {
+      renderSettings(); $('settings').hidden = false; $('sync-details').open = true; testConnection();
+    };
   }
 
   function setSyncStatus(t) { var el = $('sync-status'); if (el) el.textContent = t; }
@@ -482,6 +559,7 @@
     renderCalendar();
     renderSnow();
     renderConnect();
+    renderSyncBanner();
     paintMap();
     $('footnote').innerHTML = 'Schedule: City of Boston open data (retrieved ' + esc(String(data.sourceUpdated).slice(0, 10)) +
       '). Beacon Hill residential sweeping runs Mar 1 to Dec 31. City holidays are flagged but still counted. ' +
