@@ -129,9 +129,15 @@
     return top;
   }
 
-  function activeClaim(state, p) {
-    var c = state.claim, m = nextMove(p);
-    return c && m && c.moveKey === moveKey(m) ? c : null;
+  /* A claim means "I'm handling the car until it is parked again". It is not
+     tied to one ranked option, because each phone ranks on its own (permit
+     data can differ by a few hours) and an option-level match would hide a
+     claim on the other phone. Parking clears it. */
+  function activeClaim(state) {
+    var c = state.claim, car = state.car;
+    if (!c || !c.by || !car) return null;
+    if (c.parkedAt) return c.parkedAt === car.parkedAt ? c : null;
+    return new Date(c.at) >= new Date(car.parkedAt) ? c : null;
   }
 
   /* Attach where the car was supposed to go, so learning can tell a hit from

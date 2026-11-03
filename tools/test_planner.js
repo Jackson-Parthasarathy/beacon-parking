@@ -58,3 +58,17 @@ assert(!hit || hit.permits.length === 1, 'permit overlapping a stay is attached 
 assert(withPermit[0].curb.id !== topId, 'a moving-truck permit on the top curb drops it');
 
 assert(P.holidayName(new Date('2026-11-26T17:00:00Z')) === 'Thanksgiving' && P.holidayName(new Date('2026-07-03T16:00:00Z')) === 'Independence Day', 'holidays computed, including observed dates');
+
+// Claims hold across phones that rank differently, and parking clears them
+const cs = Object.assign({}, base, { trips: [], car: { curbId: 421, parkedAt: '2026-10-30T14:00:00Z' } });
+const planA = E.plan({ data: D, state: cs, now: now0 });
+cs.claim = { by: 'Jackson', moveKey: E.moveKey(E.nextMove(planA)), parkedAt: cs.car.parkedAt, at: '2026-10-30T15:00:00Z' };
+const otherTop = { permits: [{ id: 'px', curbId: E.nextMove(planA).curb.id, from: '2026-11-01T05:00:00Z', to: '2026-11-30T04:59:00Z' }] };
+const planB = E.plan({ data: D, state: cs, restrictions: otherTop, now: now0 });
+assert(E.moveKey(E.nextMove(planB)) !== cs.claim.moveKey && E.activeClaim(cs, planB) && E.activeClaim(cs, planB).by === 'Jackson',
+  'claim shows on a phone whose top pick differs');
+assert(/^Jackson moves car/.test(E.buildEvents(planB, { data: D, state: cs }).find(e => e.kind === 'move').title), 'invite says who is moving it on either ranking');
+const legacy = Object.assign({}, cs, { claim: { by: 'Caroline', moveKey: 'old', at: '2026-10-30T15:00:00Z' } });
+assert(E.activeClaim(legacy) && E.activeClaim(legacy).by === 'Caroline', 'claim saved by the older script (no parkedAt) still counts');
+const moved = Object.assign({}, cs); E.recordPark(moved, { curbId: 3785, parkedAt: '2026-11-04T17:30:00Z' });
+assert(!E.activeClaim(moved), 'parking again clears the claim');

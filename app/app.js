@@ -98,11 +98,16 @@
         try { res = JSON.parse(t); } catch (e) { throw new Error(PAGE_HELP); }
         if (!res.ok) {
           var err = res.error || 'Backend error';
-          if (err === 'wrong passphrase') err = 'The passphrase does not match. Paste the latest setup link from the Apps Script log.';
+          var perItem = true;      // this request was refused; others may still go through
+          if (err === 'wrong passphrase') { err = 'The passphrase does not match. Paste the latest setup link from the Apps Script log.'; perItem = false; }
           // The first version of the script stored everything in one 9 KB
-          // property and fails once history grows past it.
+          // property and fails once history grows past it, and it does not
+          // know the newer actions (claims, trips, feedback).
           else if (/too large|exceeded|maximum size/i.test(err)) err = OLD_CODE_HELP + ' (' + err + ')';
-          throw new Error(err);
+          else if (err === 'unknown action') err = OLD_CODE_HELP + ' (It does not know "' + action + '" yet.)';
+          var ex = new Error(err);
+          ex.perItem = perItem;
+          throw ex;
         }
         return res.state;
       });
@@ -150,24 +155,40 @@
     renderSyncBanner();
   }
 
+  /* Send the outbox in order. If the backend refuses one change (for example
+     an old script that does not know claims), the rest still go through and
+     the refused one is retried later, then dropped after five refusals. A
+     network or deployment problem stops the pass, since nothing would get
+     through. */
   function flush() {
     if (flushing) return flushing;
     if (!synced() || !outbox.length) return Promise.resolve(true);
-    var item = outbox[0];
-    flushing = api(item.action, item.body).then(function (s) {
-      outbox.shift();
-      saveJSON('bp.outbox', outbox);
-      flushing = null;
-      if (outbox.length) return flush();
-      setSyncError('');
-      adopt(s);
-      setSyncStatus('Synced ' + E.fmtTime(new Date()));
-      return true;
-    }, function (e) {
-      flushing = null;
-      setSyncError(e.message);
-      return false;
-    });
+    var queue = outbox.slice(), lastState = null, refused = null;
+    function next() {
+      if (!queue.length) {
+        flushing = null;
+        if (refused) { setSyncError(refused); return false; }
+        setSyncError('');
+        if (lastState) adopt(lastState);
+        setSyncStatus('Synced ' + E.fmtTime(new Date()));
+        return true;
+      }
+      var item = queue.shift();
+      return api(item.action, item.body).then(function (s) {
+        outbox = outbox.filter(function (o) { return o !== item; });
+        saveJSON('bp.outbox', outbox);
+        lastState = s;
+        return next();
+      }, function (e) {
+        if (!e.perItem) { flushing = null; setSyncError(e.message); return false; }
+        item.tries = (item.tries || 0) + 1;
+        if (item.tries >= 5) outbox = outbox.filter(function (o) { return o !== item; });
+        saveJSON('bp.outbox', outbox);
+        refused = e.message;
+        return next();
+      });
+    }
+    flushing = next();
     return flushing;
   }
 
@@ -204,6 +225,8 @@
     var body = Object.assign({ events: state.events, plannedMove: state.plannedMove || null }, payload || {});
     // A newer park (or settings change) supersedes an unsent older one.
     if (REPLACES[action]) outbox = outbox.filter(function (o) { return o.action !== action; });
+    // Parking ends any claim, so unsent claims for the old spot are moot.
+    if (action === 'park') outbox = outbox.filter(function (o) { return o.action !== 'claim' && o.action !== 'unclaim'; });
     outbox.push({ action: action, body: body, at: new Date().toISOString() });
     saveJSON('bp.outbox', outbox);
     return flush().then(function (ok) {
@@ -648,8 +671,9 @@
 
   function claimMove(mv) {
     if (!cfg.name) { toast('Add your name in Settings first.'); return; }
-    state.claim = { by: cfg.name, moveKey: E.moveKey(mv), at: new Date().toISOString() };
-    commit('claim', { moveKey: state.claim.moveKey }, 'You have it. The invite now says ' + cfg.name + ' is moving the car.');
+    state.claim = { by: cfg.name, moveKey: E.moveKey(mv), parkedAt: state.car.parkedAt, at: new Date().toISOString() };
+    commit('claim', { moveKey: state.claim.moveKey, parkedAt: state.claim.parkedAt },
+      'You have it. The invite now says ' + cfg.name + ' is moving the car.');
   }
 
   function renderMoves() {
@@ -921,7 +945,7 @@
       if (document.visibilityState === 'visible') { pull(); render(); }
     });
     setInterval(function () { if (document.visibilityState === 'visible') render(); }, 60000);
-    setInterval(function () { if (document.visibilityState === 'visible') pull(); }, 120000);
+    setInterval(function () { if (document.visibilityState === 'visible') pull(); }, 60000);
   }
 
   function boot() {

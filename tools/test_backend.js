@@ -118,6 +118,12 @@ mail.length = 0;
 assert(ctx.checkClaim_(s, plan, new Date(new Date(mv.start).getTime() - 60 * 60000)) && mail.length === 1, 'unclaimed move emails both the evening before');
 assert(!ctx.checkClaim_(s, plan, new Date(new Date(mv.start).getTime() - 30 * 60000)), 'claim nudge sent only once');
 assert(/you@outlook.com/.test(mail[0].to) && /owner@example.com/.test(mail[0].to), 'nudge goes to everyone including the owner');
+r = post({ action: 'claim', key, by: 'Jackson', moveKey: 'a-different-ranking', parkedAt: s.car.parkedAt });
+assert(r.state.claim.parkedAt === s.car.parkedAt && /^Jackson moves car/.test(byKind('move').title), 'claim from a phone with a different top pick still retitles the invite');
+s = ctx.load_(); s.nudges = {}; mail.length = 0;
+assert(!ctx.checkClaim_(s, plan, new Date(new Date(mv.start).getTime() - 60 * 60000)) && mail.length === 0, 'claimed move is not nudged');
+post({ action: 'unclaim', key, by: 'Jackson' });
+s = ctx.load_(); s.nudges = {};
 
 // background check: car still logged before the sweep
 mail.length = 0;

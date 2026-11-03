@@ -100,7 +100,7 @@ function doPost(e) {
         break;
 
       case 'claim':
-        state.claim = { by: by, moveKey: req.moveKey, at: now.toISOString() };
+        state.claim = { by: by, moveKey: req.moveKey, parkedAt: req.parkedAt || (state.car && state.car.parkedAt), at: now.toISOString() };
         recompute_(state, loadEngine_(), req);
         break;
 
@@ -284,7 +284,7 @@ function checkClaim_(state, plan, now) {
   if (!move) return false;
   var start = new Date(move.start);
   var nudgeAt = new Date(start.getTime() - Engine.eveningBefore(start) * 60000);
-  var claimed = state.claim && state.claim.moveKey === move.moveKey;
+  var claimed = Engine.activeClaim(state);
   if (claimed || now < nudgeAt || now > start) return false;
   if (!once_(state, 'claim:' + move.moveKey)) return false;
   email_('Who is moving the car tomorrow?',
