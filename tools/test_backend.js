@@ -46,6 +46,7 @@ const ctx = {
   Logger: { log: m => log.push(m) },
   Session: { getEffectiveUser: () => ({ getEmail: () => 'Owner@Example.com' }) },
   ScriptApp: {
+    AuthMode: { FULL: 'FULL' }, requireAllScopes: () => {},
     getService: () => ({ getUrl: () => 'https://script.google.com/macros/s/TEST/exec' }),
     getProjectTriggers: () => triggers.slice(), deleteTrigger: t => triggers.splice(triggers.indexOf(t), 1),
     newTrigger: fn => ({ timeBased: () => ({ everyMinutes: m => ({ create: () => triggers.push({ fn, m, getHandlerFunction: () => fn }) }) }) })

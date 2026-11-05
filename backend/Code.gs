@@ -493,6 +493,9 @@ function text_(s) {
  * person plus the values for the iPhone Shortcut.
  */
 function setup() {
+  // Google's consent screen lets each permission be unticked, and an unticked
+  // one is never asked for again on its own; this re-asks for any missing.
+  ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
   var props = PropertiesService.getScriptProperties();
   var key = props.getProperty('PASSPHRASE');
   if (!key) {
